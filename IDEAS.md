@@ -75,17 +75,13 @@ Which clients actually support each MCP feature (as of March 2026):
 
 ## Feature Ideas
 
-### 1. Workspace Resources
+### 1. Workspace Resources — DONE
 
-**What**: Expose workspace files, project structure, and diagnostics summaries as MCP resources via `resources/list` and `resources/read`. Examples:
-- `file:///<workspace>/src/main.zig` — read source files
-- `zig://diagnostics` — aggregated diagnostics summary
-- `zig://build-graph` — dependency/build graph
-- `zig://project-info` — compiler version, build targets, dependencies from `build.zig.zon`
+**Implemented**: `zig://project-info` (Zig/ZLS versions + `build.zig.zon` contents) and `file:///{path}` resource template for reading any workspace file with path sandboxing.
 
-**Benefit**: Allows the AI to pull in relevant context *without* needing a tool call round-trip. Resources are designed for **application-driven** context inclusion — the client can automatically attach relevant file contents, diagnostics, or project metadata to prompts. This reduces token waste from repeatedly calling `zig_hover` or `zig_diagnostics` on many files.
-
-**Productivity gain**: **High**. Clients like Claude Desktop can show a resource picker UI, letting users attach entire files or diagnostics snapshots to the conversation in one click. Eliminates multi-step "read file → analyze → read next file" loops.
+**Deferred items**:
+- `zig://diagnostics` — Requires a diagnostics cache in `LspClient` since ZLS only pushes diagnostics via `textDocument/publishDiagnostics` (no pull API). Better implemented as a tool (`zig_diagnostics_all`, see #16) than a resource, since diagnostics change constantly and resources are typically read once for context.
+- `zig://build-graph` — Redundant with `zig://project-info` which already includes the full `build.zig.zon` contents. Not worth a separate resource.
 
 **Spec reference**: [MCP Resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
 
@@ -103,16 +99,11 @@ Which clients actually support each MCP feature (as of March 2026):
 
 ---
 
-### 3. Resource Templates
+### 3. Resource Templates — PARTIAL
 
-**What**: Expose parameterized resource URIs using RFC 6570 URI templates, e.g.:
-- `file:///{path}` — access any workspace file by path
-- `zig://symbol/{name}` — look up a symbol's documentation
-- `zig://diagnostics/{file}` — diagnostics for a specific file
+**Implemented**: `file:///{path}` template shipped with #1.
 
-**Benefit**: Templates let clients dynamically construct resource URIs without needing to list every possible resource upfront. Combined with the completion API (see idea #12), clients can offer autocomplete as the user types a file path or symbol name.
-
-**Productivity gain**: **Medium**. Particularly useful for large workspaces where listing all resources is impractical.
+**Remaining**: `zig://symbol/{name}` and `zig://diagnostics/{file}` templates depend on #16 (diagnostics cache) and would benefit from #12 (completion/autocomplete). Low standalone value — revisit when those prerequisites are built.
 
 **Spec reference**: [Resource Templates](https://modelcontextprotocol.io/specification/2025-11-25/server/resources#resource-templates)
 
