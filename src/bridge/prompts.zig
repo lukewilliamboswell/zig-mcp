@@ -509,9 +509,9 @@ test "getPrompt returns PromptNotFound for unknown name" {
     };
     var lsp_client = @import("../lsp/client.zig").LspClient.init(std.testing.allocator);
     defer lsp_client.deinit();
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
-    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", os_fs.filesystem());
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", tfs.filesystem());
     defer doc_state.deinit();
 
     const ctx = PromptContext{
@@ -520,7 +520,7 @@ test "getPrompt returns PromptNotFound for unknown name" {
         .lsp_client = &lsp_client,
         .doc_state = &doc_state,
         .zig_path = null,
-        .fs = os_fs.filesystem(),
+        .fs = tfs.filesystem(),
     };
     try std.testing.expectError(error.PromptNotFound, getPrompt(ctx, "nonexistent", .null));
 }
@@ -533,9 +533,9 @@ test "getPrompt review returns InvalidParams without file" {
     };
     var lsp_client = @import("../lsp/client.zig").LspClient.init(std.testing.allocator);
     defer lsp_client.deinit();
-    const OsFileSystem2 = @import("../fs.zig").OsFileSystem;
-    const os_fs2: OsFileSystem2 = .{};
-    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", os_fs2.filesystem());
+    const TestFileSystem2 = @import("../fs.zig").TestFileSystem;
+    var tfs2 = TestFileSystem2{};
+    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", tfs2.filesystem());
     defer doc_state.deinit();
 
     const ctx = PromptContext{
@@ -544,7 +544,7 @@ test "getPrompt review returns InvalidParams without file" {
         .lsp_client = &lsp_client,
         .doc_state = &doc_state,
         .zig_path = null,
-        .fs = os_fs2.filesystem(),
+        .fs = tfs2.filesystem(),
     };
     try std.testing.expectError(error.InvalidParams, getPrompt(ctx, "review", .null));
 }

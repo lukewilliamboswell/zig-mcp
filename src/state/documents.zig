@@ -203,9 +203,10 @@ test "uriToPath correctly decodes percent-encoded URIs used by reopenAll" {
 
 test "DocumentState init and deinit" {
     const allocator = std.testing.allocator;
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
-    var ds = DocumentState.init(allocator, "/tmp/workspace", os_fs.filesystem());
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    defer tfs.deinit(allocator);
+    var ds = DocumentState.init(allocator, "/tmp/workspace", tfs.filesystem());
     defer ds.deinit();
     try std.testing.expectEqualStrings("/tmp/workspace", ds.workspace_path);
 }

@@ -131,14 +131,14 @@ test "readResource returns error for unknown URI" {
         .root_uri = "file:///tmp",
         .allocator = std.testing.allocator,
     };
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
     const ctx = ResourceContext{
         .allocator = std.testing.allocator,
         .workspace = &workspace,
         .zig_path = null,
         .zls_path = null,
-        .fs = os_fs.filesystem(),
+        .fs = tfs.filesystem(),
     };
     try std.testing.expectError(error.ResourceNotFound, readResource(ctx, "zig://unknown"));
 }

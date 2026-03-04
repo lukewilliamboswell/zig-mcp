@@ -1351,8 +1351,8 @@ test "getIntArg from non-object returns null" {
 
 test "requireCommandTools enforces policy" {
     const alloc = std.testing.allocator;
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
     const ctx = ToolContext{
         .lsp_client = undefined,
         .doc_state = undefined,
@@ -1362,7 +1362,7 @@ test "requireCommandTools enforces policy" {
         .zig_path = null,
         .zvm_path = null,
         .zls_path = null,
-        .fs = os_fs.filesystem(),
+        .fs = tfs.filesystem(),
     };
     try std.testing.expectError(ToolError.CommandToolsDisabled, requireCommandTools(ctx));
 }

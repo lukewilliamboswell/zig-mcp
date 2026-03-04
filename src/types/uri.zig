@@ -206,28 +206,41 @@ test "resolvePath joins relative to workspace" {
 
 test "resolvePathWithinWorkspace accepts path inside root" {
     const allocator = std.testing.allocator;
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
-    const fs = os_fs.filesystem();
-    const result = try resolvePathWithinWorkspace(allocator, "/tmp", "/tmp", fs);
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    defer tfs.deinit(allocator);
+    try tfs.addFile(allocator, "/workspace", "");
+    try tfs.addFile(allocator, "/workspace/src/main.zig", "pub fn main() {}");
+    const fs = tfs.filesystem();
+
+    const result = try resolvePathWithinWorkspace(allocator, "/workspace", "/workspace/src/main.zig", fs);
     defer allocator.free(result);
-    try std.testing.expectEqualStrings("/tmp", result);
+    try std.testing.expectEqualStrings("/workspace/src/main.zig", result);
 }
 
 test "resolvePathWithinWorkspace rejects absolute path outside root" {
     const allocator = std.testing.allocator;
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
-    const fs = os_fs.filesystem();
-    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/etc/passwd", fs));
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    defer tfs.deinit(allocator);
+    try tfs.addFile(allocator, "/workspace", "");
+    try tfs.addFile(allocator, "/etc/passwd", "root:x:0:0");
+    const fs = tfs.filesystem();
+
+    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/workspace", "/etc/passwd", fs));
 }
 
 test "resolvePathWithinWorkspace rejects traversal outside root" {
     const allocator = std.testing.allocator;
-    const OsFileSystem = @import("../fs.zig").OsFileSystem;
-    const os_fs: OsFileSystem = .{};
-    const fs = os_fs.filesystem();
-    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/tmp/../etc/passwd", fs));
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    defer tfs.deinit(allocator);
+    // TestFileSystem treats stored paths as canonical, so the traversal
+    // path won't resolve (not in the map) and returns FileNotFound.
+    try tfs.addFile(allocator, "/workspace", "");
+    const fs = tfs.filesystem();
+
+    try std.testing.expectError(error.FileNotFound, resolvePathWithinWorkspace(allocator, "/workspace", "/workspace/../etc/passwd", fs));
 }
 
 test "uri with spaces" {
