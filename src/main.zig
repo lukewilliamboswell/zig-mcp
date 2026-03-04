@@ -13,7 +13,7 @@ const DocumentState = @import("state/documents.zig").DocumentState;
 const DiagnosticsCache = @import("state/diagnostics.zig").DiagnosticsCache;
 const Workspace = @import("state/workspace.zig").Workspace;
 const uri_util = @import("types/uri.zig");
-const binary_policy = @import("security/binary_policy.zig");
+
 const OsFileSystem = @import("fs.zig").OsFileSystem;
 
 // Pull in test references
@@ -34,7 +34,7 @@ comptime {
     _ = @import("state/workspace.zig");
     _ = @import("zls/process.zig");
     _ = @import("lsp/client.zig");
-    _ = @import("security/binary_policy.zig");
+
     _ = @import("fs.zig");
 }
 
@@ -74,7 +74,6 @@ pub fn main() !void {
     var zig_path_arg: ?[]const u8 = null;
     var zvm_path_arg: ?[]const u8 = null;
     var allow_command_tools = false;
-    var allow_untrusted_binaries = false;
 
     // Skip program name
     _ = args.next();
@@ -90,7 +89,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--allow-command-tools")) {
             allow_command_tools = true;
         } else if (std.mem.eql(u8, arg, "--allow-untrusted-binaries")) {
-            allow_untrusted_binaries = true;
+            // Accepted for backwards compatibility, but no longer needed.
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printUsage();
             return;
@@ -117,13 +116,13 @@ pub fn main() !void {
     log.info("Workspace: {s}", .{workspace.root_path});
 
     const zig_path = if (zig_path_arg) |p|
-        try validateBinaryPath(allocator, p, "zig", allow_untrusted_binaries)
+        try validateBinaryPath(allocator, p, "zig")
     else
         null;
     defer if (zig_path) |p| allocator.free(p);
 
     const zvm_path = if (zvm_path_arg) |p|
-        try validateBinaryPath(allocator, p, "zvm", allow_untrusted_binaries)
+        try validateBinaryPath(allocator, p, "zvm")
     else
         null;
     defer if (zvm_path) |p| allocator.free(p);
@@ -135,7 +134,7 @@ pub fn main() !void {
 
     // Find ZLS
     const zls_path = if (zls_path_arg) |p| blk: {
-        break :blk try validateBinaryPath(allocator, p, "zls", allow_untrusted_binaries);
+        break :blk try validateBinaryPath(allocator, p, "zls");
     }
     else
         findZls(allocator) catch {
@@ -266,8 +265,6 @@ fn printUsage() void {
         \\  --zig-path <path>        Path to zig binary (required with --allow-command-tools)
         \\  --zvm-path <path>        Path to zvm binary (optional, enables zig_manage)
         \\  --allow-command-tools    Enable command execution tools (disabled by default)
-        \\  --allow-untrusted-binaries
-        \\                           Allow binaries outside trusted dirs (/usr/bin, /usr/local/bin, /opt/homebrew/bin, $HOME/bin)
         \\  --help, -h               Show this help message
         \\  --version                Show version
         \\
@@ -287,7 +284,7 @@ fn printUsage() void {
     , .{});
 }
 
-fn validateBinaryPath(allocator: std.mem.Allocator, path: []const u8, comptime name: []const u8, allow_untrusted: bool) ![]const u8 {
+fn validateBinaryPath(allocator: std.mem.Allocator, path: []const u8, comptime name: []const u8) ![]const u8 {
     if (!std.fs.path.isAbsolute(path)) {
         log.err("--{s}-path must be an absolute path", .{name});
         std.process.exit(1);
@@ -297,16 +294,6 @@ fn validateBinaryPath(allocator: std.mem.Allocator, path: []const u8, comptime n
         log.err("--{s}-path does not exist or is not accessible: {s}", .{ name, path });
         std.process.exit(1);
     };
-    errdefer allocator.free(canonical);
-
-    if (!allow_untrusted) {
-        const home = std.process.getEnvVarOwned(allocator, "HOME") catch null;
-        defer if (home) |h| allocator.free(h);
-        if (!binary_policy.isTrustedBinaryPath(canonical, home)) {
-            log.err("--{s}-path is outside trusted dirs. Use --allow-untrusted-binaries to override.", .{name});
-            std.process.exit(1);
-        }
-    }
 
     return canonical;
 }

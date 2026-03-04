@@ -34,17 +34,3 @@ Files are opened in ZLS lazily on first access — no need to manage document st
 ### Dynamic tool registration
 
 LSP-backed tools are registered dynamically based on what the connected ZLS instance reports in its server capabilities. If ZLS doesn't advertise a capability, the corresponding tool won't appear.
-
-## Trusted binary paths
-
-By default, configured binaries (`--zig-path`, `--zls-path`, `--zvm-path`) are allowed only from trusted directories:
-
-- `/usr/bin`
-- `/usr/local/bin`
-- `/opt/homebrew/bin`
-- `/home/linuxbrew/.linuxbrew/bin`
-- `$HOME/bin`
-
-Notes:
-- Paths are validated using canonical paths. Symlink targets are checked.
-- If your binary lives outside trusted dirs, either move/copy the full installation into a trusted dir, or use `--allow-untrusted-binaries`.

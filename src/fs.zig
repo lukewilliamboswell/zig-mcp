@@ -185,10 +185,12 @@ test "OsFileSystem read existing file" {
     const os_fs: OsFileSystem = .{};
     const fs = os_fs.filesystem();
 
-    // /tmp always exists on Linux
+    // /tmp is a symlink to /private/tmp on macOS, so compare against std realpath
     const resolved = try fs.realpathAlloc(allocator, "/tmp");
     defer allocator.free(resolved);
-    try std.testing.expectEqualStrings("/tmp", resolved);
+    const expected = try std.fs.cwd().realpathAlloc(allocator, "/tmp");
+    defer allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, resolved);
 }
 
 test "OsFileSystem read missing file returns FileNotFound" {
