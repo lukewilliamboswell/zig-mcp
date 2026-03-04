@@ -327,30 +327,27 @@ pub const LspClient = struct {
                 else => continue,
             };
 
-            if (obj.get("id")) |id_val| {
-                // Response — find pending request
-                const id: i64 = switch (id_val) {
-                    .integer => |i| i,
-                    else => continue,
-                };
-
-                self.pending_mutex.lock();
-                const maybe_pending = self.pending.get(id);
-                self.pending_mutex.unlock();
-
-                if (maybe_pending) |p| {
-                    // Store the full response body
-                    p.response = self.allocator.dupe(u8, data) catch null;
-                    p.event.set();
-                }
-            } else if (obj.get("method")) |method_val| {
-                // Notification from ZLS
+            if (obj.get("method")) |method_val| {
+                // Message has "method" — it's a notification or server-initiated request
                 const method = switch (method_val) {
                     .string => |s| s,
                     else => continue,
                 };
 
-                if (std.mem.eql(u8, method, "textDocument/publishDiagnostics")) {
+                if (obj.get("id")) |id_val| {
+                    // Server-initiated request (has both method and id).
+                    // Respond with MethodNotFound to prevent ZLS from hanging.
+                    log.debug("Server request: {s}", .{method});
+                    const req_id: json_rpc.RequestId = switch (id_val) {
+                        .integer => |i| .{ .integer = i },
+                        .string => |s| .{ .string = s },
+                        else => .none,
+                    };
+                    const err_resp = json_rpc.writeError(self.allocator, req_id, json_rpc.ErrorCode.method_not_found, "Not supported") catch continue;
+                    defer self.allocator.free(err_resp);
+                    const stdin = self.zls_stdin orelse continue;
+                    LspTransport.writeMessage(stdin, err_resp) catch {};
+                } else if (std.mem.eql(u8, method, "textDocument/publishDiagnostics")) {
                     // Signal any waiter registered for this URI
                     if (obj.get("params")) |params| {
                         if (params == .object) {
@@ -365,6 +362,22 @@ pub const LspClient = struct {
                             }
                         }
                     }
+                }
+            } else if (obj.get("id")) |id_val| {
+                // Response — find pending request (no method field)
+                const id: i64 = switch (id_val) {
+                    .integer => |i| i,
+                    else => continue,
+                };
+
+                self.pending_mutex.lock();
+                const maybe_pending = self.pending.get(id);
+                self.pending_mutex.unlock();
+
+                if (maybe_pending) |p| {
+                    // Store the full response body
+                    p.response = self.allocator.dupe(u8, data) catch null;
+                    p.event.set();
                 }
             }
         }

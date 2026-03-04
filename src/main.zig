@@ -25,6 +25,7 @@ comptime {
     _ = @import("mcp/types.zig");
     _ = @import("bridge/registry.zig");
     _ = @import("bridge/tools.zig");
+    _ = @import("bridge/workspace_edit.zig");
     _ = @import("bridge/resources.zig");
     _ = @import("bridge/prompts.zig");
     _ = @import("state/documents.zig");

@@ -3,6 +3,7 @@ const registry = @import("registry.zig");
 const mcp_types = @import("../mcp/types.zig");
 const lsp_types = @import("../lsp/types.zig");
 const uri_util = @import("../types/uri.zig");
+const workspace_edit = @import("workspace_edit.zig");
 const ServerCapabilities = @import("../lsp/client.zig").ServerCapabilities;
 
 const ToolContext = registry.ToolContext;
@@ -163,6 +164,23 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .required = &.{ "file", "start_line", "start_char", "end_line", "end_char" },
         },
         .annotations = read_only,
+    });
+
+    if (caps.code_action) try reg.register("zig_apply_code_action", handleApplyCodeAction, .{
+        .name = "zig_apply_code_action",
+        .description = "Apply a code action (quick fix, refactor) from zig_code_action. Use zig_code_action first to list available actions, then apply one by index.",
+        .inputSchema = .{
+            .properties = try makeProps(reg.allocator, &.{
+                .{ "file", "string", "Path to the Zig source file" },
+                .{ "start_line", "integer", "0-based start line" },
+                .{ "start_char", "integer", "0-based start character" },
+                .{ "end_line", "integer", "0-based end line" },
+                .{ "end_char", "integer", "0-based end character" },
+                .{ "action_index", "integer", "1-based index of the action to apply (from zig_code_action output)" },
+            }),
+            .required = &.{ "file", "start_line", "start_char", "end_line", "end_char", "action_index" },
+        },
+        .annotations = write_local,
     });
 
     if (caps.signature_help) try reg.register("zig_signature_help", handleSignatureHelp, .{
@@ -518,6 +536,165 @@ fn handleCodeAction(ctx: ToolContext, args: std.json.Value) ToolError![]const u8
     defer ctx.allocator.free(response);
 
     return formatCodeActionsResponse(ctx.allocator, response) catch return ToolError.LspError;
+}
+
+fn handleApplyCodeAction(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
+    const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
+    const start_line = getIntArg(args, "start_line") orelse return ToolError.InvalidParams;
+    const start_char = getIntArg(args, "start_char") orelse return ToolError.InvalidParams;
+    const end_line = getIntArg(args, "end_line") orelse return ToolError.InvalidParams;
+    const end_char = getIntArg(args, "end_char") orelse return ToolError.InvalidParams;
+    const action_index_raw = getIntArg(args, "action_index") orelse return ToolError.InvalidParams;
+    if (action_index_raw < 1) return ToolError.InvalidParams;
+    const action_index: usize = @intCast(action_index_raw);
+
+    const file_uri = ctx.doc_state.ensureOpen(ctx.lsp_client, file, ctx.allocator) catch |err| return openPathToToolError(err);
+    defer ctx.allocator.free(file_uri);
+
+    const Params = struct {
+        textDocument: struct { uri: []const u8 },
+        range: struct {
+            start: struct { line: i64, character: i64 },
+            end: struct { line: i64, character: i64 },
+        },
+        context: struct {
+            diagnostics: []const struct {} = &.{},
+        },
+    };
+
+    const response = ctx.lsp_client.sendRequest(ctx.allocator, "textDocument/codeAction", Params{
+        .textDocument = .{ .uri = file_uri },
+        .range = .{
+            .start = .{ .line = start_line, .character = start_char },
+            .end = .{ .line = end_line, .character = end_char },
+        },
+        .context = .{},
+    }) catch |err| return lspToToolError(err);
+    defer ctx.allocator.free(response);
+
+    // Parse the response to extract the action at the given index
+    const parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, response, .{}) catch return ToolError.LspError;
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return ToolError.LspError,
+    };
+
+    const result = obj.get("result") orelse return ToolError.LspError;
+    if (result == .null) {
+        return ctx.allocator.dupe(u8, "No code actions available") catch return ToolError.OutOfMemory;
+    }
+
+    const actions = switch (result) {
+        .array => |a| a,
+        else => return ToolError.LspError,
+    };
+
+    if (actions.items.len == 0) {
+        return ctx.allocator.dupe(u8, "No code actions available") catch return ToolError.OutOfMemory;
+    }
+
+    if (action_index > actions.items.len) {
+        var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
+        aw.writer.print("Invalid action_index: {d}. Only {d} action(s) available.", .{ action_index, actions.items.len }) catch return ToolError.OutOfMemory;
+        return aw.toOwnedSlice() catch return ToolError.OutOfMemory;
+    }
+
+    const action = actions.items[action_index - 1]; // Convert 1-based to 0-based
+    const action_obj = switch (action) {
+        .object => |o| o,
+        else => return ToolError.LspError,
+    };
+
+    const title = switch (action_obj.get("title") orelse .null) {
+        .string => |s| s,
+        else => "Unknown action",
+    };
+
+    // Try to get the edit directly from the action
+    const edit_val = action_obj.get("edit");
+
+    // If no edit, try to resolve the action via codeAction/resolve
+    if (edit_val == null or edit_val.? == .null) {
+        const resolve_response = ctx.lsp_client.sendRequest(ctx.allocator, "codeAction/resolve", action) catch {
+            if (action_obj.get("command") != null) {
+                return ctx.allocator.dupe(u8, "This action requires command execution, which is not yet supported.") catch return ToolError.OutOfMemory;
+            }
+            return ToolError.LspError;
+        };
+        defer ctx.allocator.free(resolve_response);
+
+        // Parse resolved response for edit
+        const resolved_parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, resolve_response, .{}) catch return ToolError.LspError;
+        defer resolved_parsed.deinit();
+
+        const resolved_obj = switch (resolved_parsed.value) {
+            .object => |o| o,
+            else => return ToolError.LspError,
+        };
+
+        const resolved_result = switch (resolved_obj.get("result") orelse return ToolError.LspError) {
+            .object => |o| o,
+            else => return ToolError.LspError,
+        };
+
+        const resolved_edit = resolved_result.get("edit") orelse {
+            if (action_obj.get("command") != null) {
+                return ctx.allocator.dupe(u8, "This action requires command execution, which is not yet supported.") catch return ToolError.OutOfMemory;
+            }
+            return ctx.allocator.dupe(u8, "Action has no workspace edit to apply.") catch return ToolError.OutOfMemory;
+        };
+
+        if (resolved_edit == .null) {
+            return ctx.allocator.dupe(u8, "Action has no workspace edit to apply.") catch return ToolError.OutOfMemory;
+        }
+
+        // Apply the resolved edit
+        const summary = workspace_edit.applyWorkspaceEdit(ctx.allocator, resolved_edit, ctx.fs) catch return ToolError.LspError;
+        defer ctx.allocator.free(summary);
+
+        // Sync ZLS state: close modified docs so next access re-reads from disk
+        syncModifiedDocs(ctx, resolved_edit);
+
+        var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
+        aw.writer.print("Applied: {s}\n\n{s}", .{ title, summary }) catch return ToolError.OutOfMemory;
+        return aw.toOwnedSlice() catch return ToolError.OutOfMemory;
+    }
+
+    const edit = edit_val.?;
+    if (edit == .null) {
+        return ctx.allocator.dupe(u8, "Action has no workspace edit to apply.") catch return ToolError.OutOfMemory;
+    }
+
+    // Apply the edit
+    const summary = workspace_edit.applyWorkspaceEdit(ctx.allocator, edit, ctx.fs) catch return ToolError.LspError;
+    defer ctx.allocator.free(summary);
+
+    // Sync ZLS state
+    syncModifiedDocs(ctx, edit);
+
+    var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
+    aw.writer.print("Applied: {s}\n\n{s}", .{ title, summary }) catch return ToolError.OutOfMemory;
+    return aw.toOwnedSlice() catch return ToolError.OutOfMemory;
+}
+
+/// Close documents in ZLS that were modified by a workspace edit, so next access re-reads from disk.
+fn syncModifiedDocs(ctx: ToolContext, edit: std.json.Value) void {
+    const edit_obj = switch (edit) {
+        .object => |o| o,
+        else => return,
+    };
+
+    const changes = switch (edit_obj.get("changes") orelse return) {
+        .object => |o| o,
+        else => return,
+    };
+
+    var it = changes.iterator();
+    while (it.next()) |entry| {
+        ctx.doc_state.closeDoc(ctx.lsp_client, entry.key_ptr.*) catch {};
+    }
 }
 
 fn handleSignatureHelp(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {

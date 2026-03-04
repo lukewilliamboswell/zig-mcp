@@ -9,6 +9,7 @@ pub const FileSystem = struct {
     pub const VTable = struct {
         readFileAlloc: *const fn (ctx: *const anyopaque, allocator: std.mem.Allocator, path: []const u8, max_size: usize) ReadError![]const u8,
         realpathAlloc: *const fn (ctx: *const anyopaque, allocator: std.mem.Allocator, path: []const u8) RealpathError![]const u8,
+        writeFile: *const fn (ctx: *const anyopaque, path: []const u8, content: []const u8) WriteError!void,
     };
 
     pub const ReadError = error{
@@ -23,12 +24,22 @@ pub const FileSystem = struct {
         RealpathFailed,
     };
 
+    pub const WriteError = error{
+        FileNotFound,
+        OutOfMemory,
+        WriteFailed,
+    };
+
     pub fn readFileAlloc(self: FileSystem, allocator: std.mem.Allocator, path: []const u8, max_size: usize) ReadError![]const u8 {
         return self.vtable.readFileAlloc(self.ptr, allocator, path, max_size);
     }
 
     pub fn realpathAlloc(self: FileSystem, allocator: std.mem.Allocator, path: []const u8) RealpathError![]const u8 {
         return self.vtable.realpathAlloc(self.ptr, allocator, path);
+    }
+
+    pub fn writeFile(self: FileSystem, path: []const u8, content: []const u8) WriteError!void {
+        return self.vtable.writeFile(self.ptr, path, content);
     }
 };
 
@@ -40,6 +51,7 @@ pub const OsFileSystem = struct {
             .vtable = &.{
                 .readFileAlloc = readFileAllocImpl,
                 .realpathAlloc = realpathAllocImpl,
+                .writeFile = writeFileImpl,
             },
         };
     }
@@ -59,11 +71,25 @@ pub const OsFileSystem = struct {
             else => return error.RealpathFailed,
         };
     }
+
+    fn writeFileImpl(_: *const anyopaque, path: []const u8, content: []const u8) FileSystem.WriteError!void {
+        const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            else => return error.WriteFailed,
+        };
+        defer file.close();
+        file.writeAll(content) catch return error.WriteFailed;
+    }
 };
 
 /// In-memory filesystem backend for tests.
 pub const TestFileSystem = struct {
     files: std.StringHashMapUnmanaged([]const u8) = .empty,
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn init(allocator: std.mem.Allocator) TestFileSystem {
+        return .{ .allocator = allocator };
+    }
 
     pub fn filesystem(self: *const TestFileSystem) FileSystem {
         return .{
@@ -71,15 +97,23 @@ pub const TestFileSystem = struct {
             .vtable = &.{
                 .readFileAlloc = readFileAllocImpl,
                 .realpathAlloc = realpathAllocImpl,
+                .writeFile = writeFileImpl,
             },
         };
     }
 
     pub fn addFile(self: *TestFileSystem, allocator: std.mem.Allocator, path: []const u8, content: []const u8) !void {
-        try self.files.put(allocator, path, content);
+        const owned_content = if (self.allocator) |a| try a.dupe(u8, content) else content;
+        try self.files.put(allocator, path, owned_content);
     }
 
     pub fn deinit(self: *TestFileSystem, allocator: std.mem.Allocator) void {
+        if (self.allocator) |a| {
+            var it = self.files.iterator();
+            while (it.next()) |entry| {
+                a.free(entry.value_ptr.*);
+            }
+        }
         self.files.deinit(allocator);
     }
 
@@ -95,6 +129,15 @@ pub const TestFileSystem = struct {
             return allocator.dupe(u8, path) catch return error.OutOfMemory;
         }
         return error.FileNotFound;
+    }
+
+    fn writeFileImpl(ctx: *const anyopaque, path: []const u8, content: []const u8) FileSystem.WriteError!void {
+        const mutself: *TestFileSystem = @constCast(@ptrCast(@alignCast(ctx)));
+        const alloc = mutself.allocator orelse return error.WriteFailed;
+        const entry = mutself.files.getEntry(path) orelse return error.FileNotFound;
+        const owned = alloc.dupe(u8, content) catch return error.OutOfMemory;
+        alloc.free(entry.value_ptr.*);
+        entry.value_ptr.* = owned;
     }
 };
 
@@ -151,4 +194,27 @@ test "OsFileSystem read missing file returns FileNotFound" {
     const os_fs: OsFileSystem = .{};
     const fs = os_fs.filesystem();
     try std.testing.expectError(error.FileNotFound, fs.readFileAlloc(std.testing.allocator, "/nonexistent_file_abc123", 1024));
+}
+
+test "TestFileSystem writeFile updates content" {
+    const allocator = std.testing.allocator;
+    var tfs = TestFileSystem.init(allocator);
+    defer tfs.deinit(allocator);
+    try tfs.addFile(allocator, "/test/file.zig", "old content");
+
+    const fs = tfs.filesystem();
+    try fs.writeFile("/test/file.zig", "new content");
+
+    const content = try fs.readFileAlloc(allocator, "/test/file.zig", 1024);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("new content", content);
+}
+
+test "TestFileSystem writeFile missing file returns error" {
+    const allocator = std.testing.allocator;
+    var tfs = TestFileSystem.init(allocator);
+    defer tfs.deinit(allocator);
+
+    const fs = tfs.filesystem();
+    try std.testing.expectError(error.FileNotFound, fs.writeFile("/nonexistent", "data"));
 }

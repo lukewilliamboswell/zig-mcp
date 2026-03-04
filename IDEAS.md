@@ -19,7 +19,7 @@
 ## Current State
 
 zig-mcp v0.1.0 currently provides:
-- **19 tools**: 14 LSP-backed code intelligence tools + 5 command execution tools
+- **20 tools**: 15 LSP-backed code intelligence tools + 5 command execution tools
 - **stdio transport** only (newline-delimited JSON-RPC)
 - **3 protocol versions**: 2025-11-25, 2025-06-18, 2024-11-05
 - **2 resources**: `zig://project-info` (versions + build.zig.zon) and `file:///{path}` workspace file template
@@ -252,9 +252,9 @@ LSP-dependent prompts (`explain`, `test-scaffold`) gracefully degrade to file-co
 
 ### 14. Tool Annotations (Read-Only, Destructive, Open-World Hints) — DONE
 
-**Implemented**: All 18 tools now have `annotations` in their tool definitions:
+**Implemented**: All 20 tools now have `annotations` in their tool definitions:
 - 14 read-only tools (`readOnlyHint: true, openWorldHint: false`): hover, definition, declaration, type_definition, references, completion, diagnostics, document_symbols, workspace_symbols, code_action, signature_help, inlay_hints, check, version
-- 2 local-write tools (`destructiveHint: false, openWorldHint: false`): format, rename
+- 3 local-write tools (`destructiveHint: false, openWorldHint: false`): format, rename, apply_code_action
 - 2 local-command tools (`destructiveHint: false, openWorldHint: false`): build, test
 - 1 network tool (`destructiveHint: false, openWorldHint: true`): manage (may fetch from network)
 
@@ -358,15 +358,11 @@ One `zig_inlay_hints` call replaces potentially dozens of `zig_hover` calls for 
 
 ---
 
-### 22. Apply Code Action Tool
+### 22. Apply Code Action Tool — DONE
 
-**What**: Add a `zig_apply_code_action` tool that executes a code action returned by `zig_code_action`, applying the resulting workspace edits. ZLS supports `workspace/applyEdit`, which zig-mcp can intercept to capture the edits and return them as diffs.
+**Implemented**: `zig_apply_code_action` tool takes the same range params as `zig_code_action` plus a 1-based `action_index`. It re-sends `textDocument/codeAction`, picks the action at the given index, extracts the workspace edit (or resolves it via `codeAction/resolve`), applies edits to disk using a new `applyWorkspaceEdit` utility, and syncs ZLS document state by closing modified docs (next access re-reads from disk).
 
-**Benefit**: Currently `zig_code_action` lists available fixes but provides no way to apply them. The AI must manually reproduce the fix, which is error-prone. This tool closes the loop: list actions → choose one → apply it. Enables automated fix-all workflows.
-
-**Productivity gain**: **Medium-High**. The most common code action workflow is "remove unused variable" or "add discard" — operations that are tedious when done manually across many locations. Automating application saves significant time in refactoring sessions.
-
-**ZLS support**: `workspace/applyEdit` is implemented (ZLS sends edit requests to the client). zig-mcp would need to act as the "client" that receives and records these edits.
+Supporting changes: added `writeFile` to the `FileSystem` vtable (both `OsFileSystem` and `TestFileSystem`), created `src/bridge/workspace_edit.zig` with reusable `applyWorkspaceEdit` and `applyTextEdits` functions, and fixed the LSP reader loop to check `method` before `id` so server-initiated requests aren't misidentified as responses.
 
 ---
 
@@ -392,7 +388,7 @@ Revised with client support research and ZLS capability verification. Features a
 | 4 | Prompts | 5/6 | High | Medium | **Done** — 5 prompts: review, explain, fix-diagnostics, optimize, test-scaffold |
 | 1 | Workspace Resources | 4/6 | High | Medium | **Done** — `zig://project-info` + `file:///{path}` template |
 | 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Done** — `zig_inlay_hints` tool |
-| 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Do soon** — completes code action workflow |
+| 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Done** — `zig_apply_code_action` tool |
 | 16 | Multi-File Diagnostics | 6/6¹ | High | Medium² | **Do soon** — high payoff but needs diagnostics cache |
 | 7 | Request Cancellation | ?/6 | Medium | Low | **Do soon** — command-tool cancellation only (ZLS ignores `$/cancelRequest`) |
 | 5 | Structured Logging | 1-2/6 | Medium | Low-Medium | **Do soon** — aids debugging, low client support but useful on stderr too |
