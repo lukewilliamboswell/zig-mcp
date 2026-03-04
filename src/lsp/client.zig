@@ -24,6 +24,7 @@ pub const ServerCapabilities = struct {
     code_action: bool = false,
     signature_help: bool = false,
     document_formatting: bool = false,
+    inlay_hint: bool = false,
     /// True when ZLS is connected (diagnostics come via publishDiagnostics notifications).
     diagnostics: bool = false,
 };
@@ -507,6 +508,7 @@ fn parseServerCapabilities(allocator: std.mem.Allocator, response: []const u8) S
     caps.code_action = isProviderEnabled(capabilities, "codeActionProvider");
     caps.signature_help = isProviderEnabled(capabilities, "signatureHelpProvider");
     caps.document_formatting = isProviderEnabled(capabilities, "documentFormattingProvider");
+    caps.inlay_hint = isProviderEnabled(capabilities, "inlayHintProvider");
 
     // If the server reported any capabilities, it's connected and can provide diagnostics
     // via textDocument/publishDiagnostics notifications.

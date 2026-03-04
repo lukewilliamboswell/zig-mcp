@@ -19,7 +19,7 @@
 ## Current State
 
 zig-mcp v0.1.0 currently provides:
-- **18 tools**: 13 LSP-backed code intelligence tools + 5 command execution tools
+- **19 tools**: 14 LSP-backed code intelligence tools + 5 command execution tools
 - **stdio transport** only (newline-delimited JSON-RPC)
 - **3 protocol versions**: 2025-11-25, 2025-06-18, 2024-11-05
 - **2 resources**: `zig://project-info` (versions + build.zig.zon) and `file:///{path}` workspace file template
@@ -253,7 +253,7 @@ LSP-dependent prompts (`explain`, `test-scaffold`) gracefully degrade to file-co
 ### 14. Tool Annotations (Read-Only, Destructive, Open-World Hints) — DONE
 
 **Implemented**: All 18 tools now have `annotations` in their tool definitions:
-- 13 read-only tools (`readOnlyHint: true, openWorldHint: false`): hover, definition, declaration, type_definition, references, completion, diagnostics, document_symbols, workspace_symbols, code_action, signature_help, check, version
+- 14 read-only tools (`readOnlyHint: true, openWorldHint: false`): hover, definition, declaration, type_definition, references, completion, diagnostics, document_symbols, workspace_symbols, code_action, signature_help, inlay_hints, check, version
 - 2 local-write tools (`destructiveHint: false, openWorldHint: false`): format, rename
 - 2 local-command tools (`destructiveHint: false, openWorldHint: false`): build, test
 - 1 network tool (`destructiveHint: false, openWorldHint: true`): manage (may fetch from network)
@@ -350,15 +350,11 @@ Annotations are serialized in `tools/list` responses, omitting unset fields so c
 
 ---
 
-### 21. Inlay Hints Tool
+### 21. Inlay Hints Tool — DONE
 
-**What**: Add a `zig_inlay_hints` tool that exposes ZLS's `textDocument/inlayHint` results. Returns inferred type annotations, parameter name hints, and other inline information for a given file or range.
+**Implemented**: `zig_inlay_hints` tool exposes ZLS's `textDocument/inlayHint` results. Takes a file path, returns all inferred type annotations and parameter name hints for the entire file. Output format: `L{line}:{char} [{type|param|hint}] {label}`. Conditionally registered based on ZLS `inlayHintProvider` capability.
 
-**Benefit**: Zig's type inference is powerful but can make code opaque — `const x = foo();` tells the AI nothing about what `x` is without hovering. Inlay hints provide this information in bulk for an entire file, giving the AI a richer understanding of types flowing through the code. This is more efficient than calling `zig_hover` on every variable individually.
-
-**Productivity gain**: **Medium-High**. Particularly valuable for understanding generic/comptime-heavy code where types are rarely explicit. One `zig_inlay_hints` call on a file replaces potentially dozens of `zig_hover` calls. Directly backed by ZLS — no additional analysis engine needed.
-
-**ZLS support**: `textDocument/inlayHint` is fully implemented.
+One `zig_inlay_hints` call replaces potentially dozens of `zig_hover` calls for understanding types in inference-heavy code.
 
 ---
 
@@ -395,7 +391,7 @@ Revised with client support research and ZLS capability verification. Features a
 | 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Done** — all 18 tools annotated |
 | 4 | Prompts | 5/6 | High | Medium | **Done** — 5 prompts: review, explain, fix-diagnostics, optimize, test-scaffold |
 | 1 | Workspace Resources | 4/6 | High | Medium | **Done** — `zig://project-info` + `file:///{path}` template |
-| 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Do first** — tool, so universally supported; backed by ZLS |
+| 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Done** — `zig_inlay_hints` tool |
 | 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Do soon** — completes code action workflow |
 | 16 | Multi-File Diagnostics | 6/6¹ | High | Medium² | **Do soon** — high payoff but needs diagnostics cache |
 | 7 | Request Cancellation | ?/6 | Medium | Low | **Do soon** — command-tool cancellation only (ZLS ignores `$/cancelRequest`) |

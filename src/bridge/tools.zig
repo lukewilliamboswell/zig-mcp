@@ -175,6 +175,18 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
         .annotations = read_only,
     });
 
+    if (caps.inlay_hint) try reg.register("zig_inlay_hints", handleInlayHints, .{
+        .name = "zig_inlay_hints",
+        .description = "Get inlay hints (inferred types, parameter names) for a Zig file. Returns type annotations and parameter hints that are normally hidden by type inference, giving a bulk view of types flowing through the code.",
+        .inputSchema = .{
+            .properties = try makeProps(reg.allocator, &.{
+                .{ "file", "string", "Path to the Zig source file" },
+            }),
+            .required = &.{"file"},
+        },
+        .annotations = read_only,
+    });
+
     // ── Command tools (always registered) ──
 
     try reg.register("zig_build", handleBuild, .{
@@ -528,6 +540,32 @@ fn handleSignatureHelp(ctx: ToolContext, args: std.json.Value) ToolError![]const
     defer ctx.allocator.free(response);
 
     return formatSignatureHelpResponse(ctx.allocator, response) catch return ToolError.LspError;
+}
+
+fn handleInlayHints(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
+    const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
+
+    const file_uri = ctx.doc_state.ensureOpen(ctx.lsp_client, file, ctx.allocator) catch |err| return openPathToToolError(err);
+    defer ctx.allocator.free(file_uri);
+
+    const Params = struct {
+        textDocument: struct { uri: []const u8 },
+        range: struct {
+            start: struct { line: i64, character: i64 },
+            end: struct { line: i64, character: i64 },
+        },
+    };
+
+    const response = ctx.lsp_client.sendRequest(ctx.allocator, "textDocument/inlayHint", Params{
+        .textDocument = .{ .uri = file_uri },
+        .range = .{
+            .start = .{ .line = 0, .character = 0 },
+            .end = .{ .line = 1_000_000, .character = 0 },
+        },
+    }) catch |err| return lspToToolError(err);
+    defer ctx.allocator.free(response);
+
+    return formatInlayHintsResponse(ctx.allocator, response) catch return ToolError.LspError;
 }
 
 // ── Command tool handlers ──
@@ -1088,6 +1126,86 @@ fn formatSignatureHelpResponse(allocator: std.mem.Allocator, response: []const u
     }
     if (sigs.items.len == 0) {
         try aw.writer.writeAll("No signature help available");
+    }
+    return try aw.toOwnedSlice();
+}
+
+fn formatInlayHintsResponse(allocator: std.mem.Allocator, response: []const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return allocator.dupe(u8, "Invalid response"),
+    };
+
+    const result = obj.get("result") orelse return allocator.dupe(u8, "No inlay hints");
+    if (result == .null) return allocator.dupe(u8, "No inlay hints available");
+
+    const hints = switch (result) {
+        .array => |a| a,
+        else => return allocator.dupe(u8, "No inlay hints"),
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+
+    for (hints.items) |hint| {
+        const hint_obj = switch (hint) {
+            .object => |o| o,
+            else => continue,
+        };
+
+        // Position
+        var line: i64 = 0;
+        var char: i64 = 0;
+        if (hint_obj.get("position")) |pos| {
+            if (pos == .object) {
+                line = switch (pos.object.get("line") orelse .null) {
+                    .integer => |i| i,
+                    else => 0,
+                };
+                char = switch (pos.object.get("character") orelse .null) {
+                    .integer => |i| i,
+                    else => 0,
+                };
+            }
+        }
+
+        // Kind: 1=Type, 2=Parameter
+        const kind_str = if (hint_obj.get("kind")) |k| switch (k) {
+            .integer => |i| switch (i) {
+                1 => "type",
+                2 => "param",
+                else => "hint",
+            },
+            else => "hint",
+        } else "hint";
+
+        // Label: can be string or array of {value} parts
+        const label = hint_obj.get("label") orelse .null;
+        switch (label) {
+            .string => |s| {
+                try aw.writer.print("L{d}:{d} [{s}] {s}\n", .{ line + 1, char, kind_str, s });
+            },
+            .array => |parts| {
+                try aw.writer.print("L{d}:{d} [{s}] ", .{ line + 1, char, kind_str });
+                for (parts.items) |part| {
+                    if (part == .object) {
+                        if (part.object.get("value")) |v| {
+                            if (v == .string) {
+                                try aw.writer.writeAll(v.string);
+                            }
+                        }
+                    }
+                }
+                try aw.writer.writeByte('\n');
+            },
+            else => continue,
+        }
+    }
+    if (hints.items.len == 0) {
+        try aw.writer.writeAll("No inlay hints found");
     }
     return try aw.toOwnedSlice();
 }
