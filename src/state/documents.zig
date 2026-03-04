@@ -14,7 +14,6 @@ pub const DocumentState = struct {
 
     const DocInfo = struct {
         version: i64,
-        uri: []const u8,
     };
 
     pub fn init(allocator: std.mem.Allocator, workspace_path: []const u8) DocumentState {
@@ -95,7 +94,6 @@ pub const DocumentState = struct {
         const stored_uri = try self.allocator.dupe(u8, file_uri);
         try self.open_docs.put(self.allocator, stored_uri, .{
             .version = 1,
-            .uri = stored_uri,
         });
 
         // Wait for ZLS to publish initial diagnostics, indicating it has analyzed the file.
@@ -140,7 +138,7 @@ pub const DocumentState = struct {
 
         var it = self.open_docs.iterator();
         while (it.next()) |entry| {
-            const uri = entry.value_ptr.uri;
+            const uri = entry.key_ptr.*;
 
             // Convert URI back to path for re-reading (handles percent-encoding)
             const path = uri_util.uriToPath(self.allocator, uri) catch {
