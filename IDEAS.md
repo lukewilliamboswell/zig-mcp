@@ -251,16 +251,15 @@ Which clients actually support each MCP feature (as of March 2026):
 
 ---
 
-### 14. Tool Annotations (Read-Only, Destructive, Open-World Hints)
+### 14. Tool Annotations (Read-Only, Destructive, Open-World Hints) — DONE
 
-**What**: Add `annotations` to tool definitions to hint at their behavior:
-- `readOnlyHint: true` for tools like `zig_hover`, `zig_references`, `zig_diagnostics`
-- `destructiveHint: false` for `zig_format` (modifies files but safely)
-- `openWorldHint: false` for LSP tools (no network), `true` for tools that might fetch dependencies
+**Implemented**: All 18 tools now have `annotations` in their tool definitions:
+- 13 read-only tools (`readOnlyHint: true, openWorldHint: false`): hover, definition, declaration, type_definition, references, completion, diagnostics, document_symbols, workspace_symbols, code_action, signature_help, check, version
+- 2 local-write tools (`destructiveHint: false, openWorldHint: false`): format, rename
+- 2 local-command tools (`destructiveHint: false, openWorldHint: false`): build, test
+- 1 network tool (`destructiveHint: false, openWorldHint: true`): manage (may fetch from network)
 
-**Benefit**: Allows clients to make better auto-approval decisions. A client could auto-approve all `readOnlyHint: true` tools without user confirmation, while always prompting for destructive operations. This reduces the click-to-approve friction for safe operations.
-
-**Productivity gain**: **Medium**. Directly reduces the number of permission prompts users see. In a typical session, most tool calls are reads (hover, definition, references), so marking them read-only could eliminate 70%+ of approval dialogs.
+Annotations are serialized in `tools/list` responses, omitting unset fields so clients fall back to MCP spec defaults.
 
 **Spec reference**: [MCP Tool Annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
 
@@ -394,7 +393,7 @@ Revised with client support research and ZLS capability verification. Features a
 
 | # | Feature | Clients | Productivity | Effort | Recommendation |
 |---|---------|---------|-------------|--------|----------------|
-| 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Do first** — trivial metadata, no runtime changes |
+| 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Done** — all 18 tools annotated |
 | 4 | Prompts | 5/6 | High | Medium | **Do first** — broadest client support after tools |
 | 1 | Workspace Resources | 4/6 | High | Medium | **Done** — `zig://project-info` + `file:///{path}` template |
 | 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Do first** — tool, so universally supported; backed by ZLS |

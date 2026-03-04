@@ -27,11 +27,20 @@ pub const ServerInfo = struct {
     version: []const u8,
 };
 
+/// MCP Tool annotations — hints about tool behavior for client auto-approval.
+pub const ToolAnnotations = struct {
+    readOnlyHint: ?bool = null,
+    destructiveHint: ?bool = null,
+    idempotentHint: ?bool = null,
+    openWorldHint: ?bool = null,
+};
+
 /// MCP Tool definition (for tools/list).
 pub const Tool = struct {
     name: []const u8,
     description: []const u8,
     inputSchema: InputSchema,
+    annotations: ?ToolAnnotations = null,
 };
 
 pub const InputSchema = struct {
@@ -138,6 +147,58 @@ test "Tool JSON serialization" {
     const obj = parsed.value.object;
     try std.testing.expectEqualStrings("zig_test", obj.get("name").?.string);
     try std.testing.expectEqualStrings("Run tests", obj.get("description").?.string);
+}
+
+test "Tool with annotations serialization" {
+    const alloc = std.testing.allocator;
+    var tool_props = std.json.ObjectMap.init(alloc);
+    defer tool_props.deinit();
+    const tool = Tool{
+        .name = "zig_hover",
+        .description = "Get hover info",
+        .inputSchema = .{
+            .properties = .{ .object = tool_props },
+        },
+        .annotations = .{ .readOnlyHint = true, .openWorldHint = false },
+    };
+    var aw: std.Io.Writer.Allocating = .init(alloc);
+    defer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
+    try jw.write(tool);
+    const json = try aw.toOwnedSlice();
+    defer alloc.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    const ann = obj.get("annotations").?.object;
+    try std.testing.expect(ann.get("readOnlyHint").?.bool == true);
+    try std.testing.expect(ann.get("openWorldHint").?.bool == false);
+    // Unset fields serialize as JSON null
+    try std.testing.expect(ann.get("destructiveHint").? == .null);
+    try std.testing.expect(ann.get("idempotentHint").? == .null);
+}
+
+test "Tool without annotations omits field" {
+    const alloc = std.testing.allocator;
+    var tool_props = std.json.ObjectMap.init(alloc);
+    defer tool_props.deinit();
+    const tool = Tool{
+        .name = "zig_test",
+        .description = "Run tests",
+        .inputSchema = .{
+            .properties = .{ .object = tool_props },
+        },
+    };
+    var aw: std.Io.Writer.Allocating = .init(alloc);
+    defer aw.deinit();
+    var jw: std.json.Stringify = .{ .writer = &aw.writer, .options = .{} };
+    try jw.write(tool);
+    const json = try aw.toOwnedSlice();
+    defer alloc.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    try std.testing.expect(obj.get("annotations").? == .null);
 }
 
 test "ServerCapabilities serialization" {

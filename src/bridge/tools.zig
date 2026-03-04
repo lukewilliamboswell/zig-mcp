@@ -19,6 +19,11 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
     };
     const pos_required = &.{ "file", "line", "character" };
 
+    // Tool annotation presets
+    const read_only: mcp_types.ToolAnnotations = .{ .readOnlyHint = true, .openWorldHint = false };
+    const write_local: mcp_types.ToolAnnotations = .{ .readOnlyHint = false, .destructiveHint = false, .openWorldHint = false };
+    const cmd_local: mcp_types.ToolAnnotations = .{ .readOnlyHint = false, .destructiveHint = false, .openWorldHint = false };
+
     // ── LSP-backed tools (conditional on server capabilities) ──
 
     if (caps.hover) try reg.register("zig_hover", handleHover, .{
@@ -28,6 +33,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.definition) try reg.register("zig_definition", handleDefinition, .{
@@ -37,6 +43,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.declaration) try reg.register("zig_declaration", handleDeclaration, .{
@@ -46,6 +53,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.type_definition) try reg.register("zig_type_definition", handleTypeDefinition, .{
@@ -55,6 +63,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.references) try reg.register("zig_references", handleReferences, .{
@@ -64,6 +73,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.completion) try reg.register("zig_completion", handleCompletion, .{
@@ -73,6 +83,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     if (caps.diagnostics) try reg.register("zig_diagnostics", handleDiagnostics, .{
@@ -84,6 +95,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"file"},
         },
+        .annotations = read_only,
     });
 
     if (caps.document_formatting) try reg.register("zig_format", handleFormat, .{
@@ -95,6 +107,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"file"},
         },
+        .annotations = write_local,
     });
 
     if (caps.rename) try reg.register("zig_rename", handleRename, .{
@@ -109,6 +122,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{ "file", "line", "character", "new_name" },
         },
+        .annotations = write_local,
     });
 
     if (caps.document_symbol) try reg.register("zig_document_symbols", handleDocumentSymbols, .{
@@ -120,6 +134,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"file"},
         },
+        .annotations = read_only,
     });
 
     if (caps.workspace_symbol) try reg.register("zig_workspace_symbols", handleWorkspaceSymbols, .{
@@ -131,6 +146,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"query"},
         },
+        .annotations = read_only,
     });
 
     if (caps.code_action) try reg.register("zig_code_action", handleCodeAction, .{
@@ -146,6 +162,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{ "file", "start_line", "start_char", "end_line", "end_char" },
         },
+        .annotations = read_only,
     });
 
     if (caps.signature_help) try reg.register("zig_signature_help", handleSignatureHelp, .{
@@ -155,6 +172,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             .properties = try makeProps(reg.allocator, pos_schema),
             .required = pos_required,
         },
+        .annotations = read_only,
     });
 
     // ── Command tools (always registered) ──
@@ -167,6 +185,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
                 .{ "args", "string", "Additional arguments to pass to zig build (space-separated)" },
             }),
         },
+        .annotations = cmd_local,
     });
 
     try reg.register("zig_test", handleTest, .{
@@ -178,6 +197,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
                 .{ "filter", "string", "Optional: test name filter" },
             }),
         },
+        .annotations = cmd_local,
     });
 
     try reg.register("zig_check", handleCheck, .{
@@ -189,6 +209,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"file"},
         },
+        .annotations = read_only,
     });
 
     try reg.register("zig_version", handleVersion, .{
@@ -197,6 +218,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
         .inputSchema = .{
             .properties = .{ .object = std.json.ObjectMap.init(reg.allocator) },
         },
+        .annotations = read_only,
     });
 
     try reg.register("zig_manage", handleManage, .{
@@ -209,6 +231,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"action"},
         },
+        .annotations = .{ .destructiveHint = false, .openWorldHint = true },
     });
 }
 

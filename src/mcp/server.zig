@@ -270,6 +270,27 @@ pub const McpServer = struct {
                 try jw.endArray();
             }
             try jw.endObject();
+            if (tool.annotations) |ann| {
+                try jw.objectField("annotations");
+                try jw.beginObject();
+                if (ann.readOnlyHint) |v| {
+                    try jw.objectField("readOnlyHint");
+                    try jw.write(v);
+                }
+                if (ann.destructiveHint) |v| {
+                    try jw.objectField("destructiveHint");
+                    try jw.write(v);
+                }
+                if (ann.idempotentHint) |v| {
+                    try jw.objectField("idempotentHint");
+                    try jw.write(v);
+                }
+                if (ann.openWorldHint) |v| {
+                    try jw.objectField("openWorldHint");
+                    try jw.write(v);
+                }
+                try jw.endObject();
+            }
             try jw.endObject();
         }
         try jw.endArray();
