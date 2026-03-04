@@ -7,14 +7,17 @@ pub const ServerCapabilities = struct {
     prompts: ?PromptsCapability = null,
 };
 
+/// Prompts capability declaration.
 pub const PromptsCapability = struct {
     listChanged: bool = false,
 };
 
+/// Tools capability declaration.
 pub const ToolsCapability = struct {
     listChanged: bool = false,
 };
 
+/// Resources capability declaration.
 pub const ResourcesCapability = struct {
     subscribe: bool = false,
     listChanged: bool = false,
@@ -27,6 +30,7 @@ pub const InitializeResult = struct {
     serverInfo: ServerInfo,
 };
 
+/// Server name and version info.
 pub const ServerInfo = struct {
     name: []const u8,
     version: []const u8,
@@ -48,6 +52,7 @@ pub const Tool = struct {
     annotations: ?ToolAnnotations = null,
 };
 
+/// JSON Schema for tool input parameters.
 pub const InputSchema = struct {
     type: []const u8 = "object",
     properties: std.json.Value = .null,
@@ -89,12 +94,14 @@ pub const Prompt = struct {
     arguments: ?[]const PromptArgument = null,
 };
 
+/// Prompt argument definition.
 pub const PromptArgument = struct {
     name: []const u8,
     description: ?[]const u8 = null,
     required: ?bool = null,
 };
 
+/// A message returned from a prompt handler.
 pub const PromptMessage = struct {
     role: []const u8,
     content: TextContent,
@@ -107,7 +114,6 @@ pub const ResourceContent = struct {
     text: ?[]const u8 = null,
 };
 
-// ── Tests ──
 
 test "makeProperty builds valid schema" {
     const alloc = std.testing.allocator;

@@ -1,3 +1,5 @@
+//! Filesystem abstraction layer for testability.
+
 const std = @import("std");
 
 /// Filesystem abstraction for testability.
@@ -141,7 +143,6 @@ pub const TestFileSystem = struct {
     }
 };
 
-// ── Tests ──
 
 test "TestFileSystem read existing file" {
     const allocator = std.testing.allocator;

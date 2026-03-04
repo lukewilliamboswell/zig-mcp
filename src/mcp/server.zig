@@ -16,7 +16,9 @@ const FileSystem = @import("../fs.zig").FileSystem;
 
 const log = std.log.scoped(.mcp_server);
 
+/// MCP server name reported during initialize.
 pub const server_name = "zig-mcp";
+/// MCP server version reported during initialize.
 pub const server_version = "0.1.0";
 
 /// MCP server state machine.
@@ -33,6 +35,7 @@ const supported_protocol_versions = [_][]const u8{
     "2024-11-05",
 };
 
+/// MCP protocol server that bridges JSON-RPC requests to tool/resource/prompt handlers.
 pub const McpServer = struct {
     state: State = .uninitialized,
     transport: *McpTransport,
@@ -355,7 +358,11 @@ pub const McpServer = struct {
 
         const result_text = handler(ctx, tool_args) catch |err| {
             // On connection failure, attempt reconnect + retry once
-            if ((err == error.NotConnected or err == error.LspError or err == error.NoResponse) and self.tryReconnectZls()) {
+            const is_connection_err = switch (err) {
+                error.NotConnected, error.LspError, error.NoResponse => true,
+                else => false,
+            };
+            if (is_connection_err and self.tryReconnectZls()) {
                 // Retry with reconnected client
                 const retry_text = handler(ctx, tool_args) catch |retry_err| {
                     try self.writeToolError(allocator, rid, retry_err);
@@ -720,7 +727,10 @@ pub const McpServer = struct {
 };
 
 fn isRecoverableTransportError(err: anytype) bool {
-    return err == error.MessageTooLarge;
+    return switch (err) {
+        error.MessageTooLarge => true,
+        else => false,
+    };
 }
 
 fn methodAllowedBeforeInitialize(method: []const u8) bool {

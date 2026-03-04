@@ -41,7 +41,6 @@ pub const Workspace = struct {
     }
 };
 
-// ── Tests ──
 
 test "Workspace init with absolute path" {
     const alloc = std.testing.allocator;

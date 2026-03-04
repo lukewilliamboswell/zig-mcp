@@ -103,7 +103,6 @@ pub const ZlsProcess = struct {
     }
 };
 
-// ── Tests ──
 
 test "ZlsProcess init state" {
     const alloc = std.testing.allocator;

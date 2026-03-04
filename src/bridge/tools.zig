@@ -265,7 +265,6 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
     });
 }
 
-// ── Helper: build JSON schema properties ──
 
 fn makeProps(allocator: std.mem.Allocator, comptime fields: anytype) ToolError!std.json.Value {
     var obj = std.json.ObjectMap.init(allocator);
@@ -278,7 +277,6 @@ fn makeProps(allocator: std.mem.Allocator, comptime fields: anytype) ToolError!s
     return .{ .object = obj };
 }
 
-// ── Helper: extract arguments ──
 
 fn getStringArg(args: std.json.Value, key: []const u8) ?[]const u8 {
     return switch (args) {
@@ -301,7 +299,6 @@ fn getIntArg(args: std.json.Value, key: []const u8) ?i64 {
     };
 }
 
-// ── LSP-backed tool handlers ──
 
 fn handleHover(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
@@ -745,7 +742,6 @@ fn handleInlayHints(ctx: ToolContext, args: std.json.Value) ToolError![]const u8
     return formatInlayHintsResponse(ctx.allocator, response) catch return ToolError.LspError;
 }
 
-// ── Command tool handlers ──
 
 fn handleBuild(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     try requireCommandTools(ctx);
@@ -833,7 +829,6 @@ fn handleManage(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     return ToolError.InvalidParams;
 }
 
-// ── Response formatters ──
 
 fn formatHoverResponse(allocator: std.mem.Allocator, response: []const u8) ![]const u8 {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
@@ -1387,7 +1382,6 @@ fn formatInlayHintsResponse(allocator: std.mem.Allocator, response: []const u8) 
     return try aw.toOwnedSlice();
 }
 
-// ── Command execution helpers ──
 
 fn runZigCommand(allocator: std.mem.Allocator, zig_path: []const u8, cwd: []const u8, subcmd: []const u8, extra: ?[]const u8) ![]const u8 {
     if (extra) |args_str| {
@@ -1487,7 +1481,6 @@ fn commandBinary(path: ?[]const u8) ?[]const u8 {
     return path;
 }
 
-// ── Tests ──
 
 test "getStringArg extracts string from JSON object" {
     const alloc = std.testing.allocator;

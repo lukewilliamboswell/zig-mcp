@@ -123,7 +123,6 @@ pub fn writeNotification(allocator: std.mem.Allocator, method: []const u8, param
     return try aw.toOwnedSlice();
 }
 
-// ── Tests ──
 
 test "RequestId integer equality" {
     const a = RequestId{ .integer = 42 };

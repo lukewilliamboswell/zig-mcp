@@ -13,6 +13,7 @@ pub const ResourceContext = struct {
     fs: FileSystem,
 };
 
+/// Errors that resource handlers may return.
 pub const ResourceError = error{
     ResourceNotFound,
     OutOfMemory,
@@ -111,7 +112,6 @@ fn runVersionCommand(allocator: std.mem.Allocator, binary: []const u8, arg: []co
     return error.CommandFailed;
 }
 
-// ── Tests ──
 
 test "listResources returns project-info" {
     const resources = listResources();

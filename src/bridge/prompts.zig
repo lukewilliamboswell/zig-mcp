@@ -1,3 +1,5 @@
+//! MCP prompt handlers for code review, explanation, diagnostics, optimization, and test scaffolding.
+
 const std = @import("std");
 const mcp_types = @import("../mcp/types.zig");
 const uri_util = @import("../types/uri.zig");
@@ -16,6 +18,7 @@ pub const PromptContext = struct {
     fs: FileSystem,
 };
 
+/// Errors that prompt handlers may return.
 pub const PromptError = error{
     PromptNotFound,
     InvalidParams,
@@ -84,7 +87,6 @@ pub fn getPrompt(ctx: PromptContext, name: []const u8, arguments: std.json.Value
     return error.PromptNotFound;
 }
 
-// ── Prompt handlers ──
 
 fn handleReview(ctx: PromptContext, arguments: std.json.Value) PromptError![]const mcp_types.PromptMessage {
     const file = getStringArg(arguments, "file") orelse return error.InvalidParams;
@@ -322,7 +324,6 @@ fn handleTestScaffold(ctx: PromptContext, arguments: std.json.Value) PromptError
     return singleUserMessage(ctx.allocator, &aw);
 }
 
-// ── Helpers ──
 
 fn getStringArg(args: std.json.Value, key: []const u8) ?[]const u8 {
     return switch (args) {
@@ -508,7 +509,6 @@ fn runAstCheck(ctx: PromptContext, file: []const u8) ?[]const u8 {
     return null;
 }
 
-// ── Tests ──
 
 test "listPrompts returns 5 prompts" {
     const prompts = listPrompts();

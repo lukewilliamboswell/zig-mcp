@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// Returns true if the binary path is in a trusted system directory or under the user's home.
 pub fn isTrustedBinaryPath(path: []const u8, home: ?[]const u8) bool {
     if (!std.fs.path.isAbsolute(path)) return false;
 

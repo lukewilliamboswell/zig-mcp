@@ -1,3 +1,5 @@
+//! Applies LSP WorkspaceEdit operations (text edits) to files on disk.
+
 const std = @import("std");
 const uri_util = @import("../types/uri.zig");
 const FileSystem = @import("../fs.zig").FileSystem;
@@ -199,7 +201,6 @@ fn lineCharToByteOffset(content: []const u8, line: usize, character: usize) usiz
     return i;
 }
 
-// ── Tests ──
 
 test "applyTextEdits single edit" {
     const allocator = std.testing.allocator;

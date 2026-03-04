@@ -74,6 +74,7 @@ pub const Hover = struct {
     range: ?Range = null,
 };
 
+/// LSP hover contents — either a markup string or a plain string.
 pub const HoverContents = union(enum) {
     markup: MarkupContent,
     string: []const u8,
@@ -103,6 +104,7 @@ pub const HoverContents = union(enum) {
     }
 };
 
+/// LSP MarkupContent with kind and value.
 pub const MarkupContent = struct {
     kind: []const u8 = "markdown",
     value: []const u8,
@@ -160,12 +162,14 @@ pub const SignatureHelp = struct {
     activeParameter: ?u32 = null,
 };
 
+/// LSP SignatureInformation.
 pub const SignatureInformation = struct {
     label: []const u8,
     documentation: ?std.json.Value = null,
     parameters: ?[]const ParameterInformation = null,
 };
 
+/// LSP ParameterInformation.
 pub const ParameterInformation = struct {
     label: std.json.Value, // string or [number, number]
     documentation: ?std.json.Value = null,
@@ -179,6 +183,7 @@ pub const CodeAction = struct {
     command: ?Command = null,
 };
 
+/// LSP Command.
 pub const Command = struct {
     title: []const u8,
     command: []const u8,
@@ -229,7 +234,6 @@ pub fn severityName(severity: ?u32) []const u8 {
     };
 }
 
-// ── Tests ──
 
 test "symbolKindName known kinds" {
     try std.testing.expectEqualStrings("File", symbolKindName(1));

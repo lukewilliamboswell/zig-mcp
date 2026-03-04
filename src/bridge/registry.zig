@@ -22,6 +22,7 @@ pub const ToolContext = struct {
 /// A tool handler function.
 pub const ToolHandler = *const fn (ctx: ToolContext, args: std.json.Value) ToolError![]const u8;
 
+/// Errors that tool handlers may return.
 pub const ToolError = error{
     InvalidParams,
     LspError,
@@ -84,7 +85,6 @@ pub const Registry = struct {
     }
 };
 
-// ── Tests ──
 
 fn dummyHandler(_: ToolContext, _: std.json.Value) ToolError![]const u8 {
     return "ok";

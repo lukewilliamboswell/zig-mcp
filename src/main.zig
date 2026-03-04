@@ -40,6 +40,7 @@ comptime {
 
 const log = std.log.scoped(.default);
 
+/// Custom logging options — route all logs to stderr to avoid contaminating MCP stdout.
 pub const std_options: std.Options = .{
     .log_level = .info,
     .logFn = logToStderr,
