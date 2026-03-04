@@ -55,26 +55,32 @@ If you installed via the plugin system, skip this section — everything is conf
 
 ### Claude Code
 
-```bash
-# add globally
-claude mcp add zig-mcp -- /absolute/path/to/zig-mcp --workspace /path/to/your/zig/project
-
-# add for current project only
-claude mcp add --scope project zig-mcp -- /absolute/path/to/zig-mcp --workspace /path/to/your/zig/project
-```
-
-Or edit `~/.claude/mcp_servers.json`:
+The recommended approach is to add a `.mcp.json` file to your project root:
 
 ```json
 {
   "mcpServers": {
     "zig-mcp": {
+      "type": "stdio",
       "command": "/absolute/path/to/zig-mcp",
-      "args": ["--workspace", "/path/to/your/zig/project"]
+      "args": [
+        "--workspace", "/path/to/your/zig/project",
+        "--allow-command-tools",
+        "--zig-path", "/path/to/zig",
+        "--zls-path", "/path/to/zls"
+      ]
     }
   }
 }
 ```
+
+Alternatively, use the CLI to write directly to `.mcp.json`:
+
+```bash
+claude mcp add --scope project zig-mcp -- /absolute/path/to/zig-mcp --workspace /path/to/your/zig/project
+```
+
+> **Avoid `claude mcp add` without `--scope project`.** The default scope is `local`, which stores the config in `~/.claude.json` (under a per-project key). Local-scoped entries take precedence over `.mcp.json`, so if you later create a `.mcp.json` with different flags, the stale local entry silently wins. If this happens, remove it with `claude mcp remove zig-mcp` and restart Claude Code.
 
 > If you omit `--workspace`, zig-mcp uses the current working directory.
 
@@ -140,10 +146,14 @@ args = [
 
 ### Code intelligence (via ZLS)
 
+Tools are registered dynamically based on what the connected ZLS instance supports.
+
 | Tool | What it does |
 |------|-------------|
 | `zig_hover` | Type info and docs for a symbol |
 | `zig_definition` | Go to definition |
+| `zig_declaration` | Go to declaration |
+| `zig_type_definition` | Go to type definition |
 | `zig_references` | Find all references |
 | `zig_completion` | Completion suggestions |
 | `zig_diagnostics` | Errors and warnings for a file |
@@ -194,6 +204,34 @@ Three threads:
 If ZLS crashes, zig-mcp automatically restarts it and re-opens all tracked documents.
 
 Files are opened in ZLS lazily on first access -- no need to manage document state manually.
+
+## Troubleshooting
+
+### "Command tools are disabled" even though `--allow-command-tools` is set
+
+Claude Code reads MCP server configs from multiple sources. When the same server name exists at multiple scopes, the highest-priority scope wins:
+
+1. **Local scope** (`~/.claude.json`, per-project key) — created by `claude mcp add` (the default) — **highest priority**
+2. **Project scope** (`.mcp.json` in project root) — created by `claude mcp add --scope project` or by hand
+3. **User scope** (`~/.claude.json`, global key) — created by `claude mcp add --scope user`
+
+If you previously used `claude mcp add` (local scope) and later switched to `.mcp.json` (project scope) with different flags, the stale local entry silently overrides your `.mcp.json`.
+
+**Fix:** Remove the local-scoped entry:
+
+```bash
+claude mcp remove zig-mcp
+```
+
+Then restart Claude Code. Your `.mcp.json` will be used.
+
+**Verify:** Run `/mcp` in Claude Code. If you see the same server name under both "Project MCPs" and "Local MCPs", the local one takes precedence.
+
+### Tools missing (e.g. no `zig_definition`, `zig_rename`, etc.)
+
+Code intelligence tools are registered dynamically based on what ZLS reports in its server capabilities. If ZLS doesn't advertise a capability, the corresponding tool won't appear.
+
+Check that your ZLS version is up to date and that `--zls-path` points to the correct binary.
 
 ## Development
 

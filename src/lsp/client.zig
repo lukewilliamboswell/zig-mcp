@@ -9,6 +9,25 @@ const PendingRequest = struct {
     allocator: std.mem.Allocator,
 };
 
+/// Parsed LSP server capabilities from the initialize response.
+/// Used to conditionally register only tools the server actually supports.
+pub const ServerCapabilities = struct {
+    hover: bool = false,
+    definition: bool = false,
+    declaration: bool = false,
+    type_definition: bool = false,
+    references: bool = false,
+    completion: bool = false,
+    rename: bool = false,
+    document_symbol: bool = false,
+    workspace_symbol: bool = false,
+    code_action: bool = false,
+    signature_help: bool = false,
+    document_formatting: bool = false,
+    /// True when ZLS is connected (diagnostics come via publishDiagnostics notifications).
+    diagnostics: bool = false,
+};
+
 /// LSP Client: manages request/response correlation with the ZLS child process.
 ///
 /// Architecture:
@@ -27,6 +46,12 @@ pub const LspClient = struct {
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     stderr_thread: ?std.Thread = null,
     zls_stderr: ?std.fs.File = null,
+    server_capabilities: ServerCapabilities = .{},
+
+    /// Per-URI events signaled when textDocument/publishDiagnostics arrives.
+    /// Used by ensureOpen to wait for ZLS to finish analyzing a newly-opened file.
+    diagnostics_waiters: std.StringHashMapUnmanaged(*std.Thread.ResetEvent) = .empty,
+    diagnostics_waiters_mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator) LspClient {
         return .{
@@ -151,7 +176,18 @@ pub const LspClient = struct {
             }
         }
         try aw.writer.writeAll(
-            \\","capabilities":{"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"completion":{"completionItem":{"snippetSupport":false}},"signatureHelp":{"signatureInformation":{"documentationFormat":["markdown","plaintext"]}},"publishDiagnostics":{"relatedInformation":true}}}}
+            \\","capabilities":{"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"completion":{"completionItem":{"snippetSupport":false}},"signatureHelp":{"signatureInformation":{"documentationFormat":["markdown","plaintext"]}},"publishDiagnostics":{"relatedInformation":true},"definition":{"dynamicRegistration":false},"references":{"dynamicRegistration":false},"documentSymbol":{"dynamicRegistration":false},"codeAction":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false}},"workspace":{"symbol":{"dynamicRegistration":false},"workspaceFolders":true}},"workspaceFolders":[{"uri":"
+        );
+        // Embed the workspace URI in the workspaceFolders array
+        for (workspace_uri) |c| {
+            switch (c) {
+                '"' => try aw.writer.writeAll("\\\""),
+                '\\' => try aw.writer.writeAll("\\\\"),
+                else => try aw.writer.writeByte(c),
+            }
+        }
+        try aw.writer.writeAll(
+            \\","name":"workspace"}]}
         );
         const init_params_json = try aw.toOwnedSlice();
         defer allocator.free(init_params_json);
@@ -209,10 +245,52 @@ pub const LspClient = struct {
         defer self.allocator.free(response);
         const duped = try allocator.dupe(u8, response);
 
+        // Parse server capabilities from the initialize response
+        self.server_capabilities = parseServerCapabilities(self.allocator, response);
+        log("server capabilities: hover={}, definition={}, declaration={}, typeDefinition={}, references={}, completion={}, rename={}, documentSymbol={}, workspaceSymbol={}, codeAction={}, signatureHelp={}, formatting={}", .{
+            self.server_capabilities.hover,
+            self.server_capabilities.definition,
+            self.server_capabilities.declaration,
+            self.server_capabilities.type_definition,
+            self.server_capabilities.references,
+            self.server_capabilities.completion,
+            self.server_capabilities.rename,
+            self.server_capabilities.document_symbol,
+            self.server_capabilities.workspace_symbol,
+            self.server_capabilities.code_action,
+            self.server_capabilities.signature_help,
+            self.server_capabilities.document_formatting,
+        });
+
         // Send initialized notification (must send empty object {}, not [])
         try self.sendRawNotification(allocator, "initialized");
 
         return duped;
+    }
+
+    /// Register a waiter for publishDiagnostics on a specific URI.
+    /// Must be called BEFORE sending didOpen to avoid missing the notification.
+    /// Returns an event the caller can timedWait on. Caller must call
+    /// unregisterDiagnosticsWaiter when done.
+    pub fn registerDiagnosticsWaiter(self: *LspClient, uri: []const u8) !*std.Thread.ResetEvent {
+        const event = try self.allocator.create(std.Thread.ResetEvent);
+        event.* = .{};
+
+        self.diagnostics_waiters_mutex.lock();
+        defer self.diagnostics_waiters_mutex.unlock();
+        const key = try self.allocator.dupe(u8, uri);
+        try self.diagnostics_waiters.put(self.allocator, key, event);
+        return event;
+    }
+
+    /// Unregister and free a diagnostics waiter.
+    pub fn unregisterDiagnosticsWaiter(self: *LspClient, uri: []const u8) void {
+        self.diagnostics_waiters_mutex.lock();
+        defer self.diagnostics_waiters_mutex.unlock();
+        if (self.diagnostics_waiters.fetchRemove(uri)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.destroy(kv.value);
+        }
     }
 
     /// Background thread: reads LSP messages from ZLS stdout, dispatches responses.
@@ -263,9 +341,30 @@ pub const LspClient = struct {
                     p.response = self.allocator.dupe(u8, data) catch null;
                     p.event.set();
                 }
+            } else if (obj.get("method")) |method_val| {
+                // Notification from ZLS
+                const method = switch (method_val) {
+                    .string => |s| s,
+                    else => continue,
+                };
+
+                if (std.mem.eql(u8, method, "textDocument/publishDiagnostics")) {
+                    // Signal any waiter registered for this URI
+                    if (obj.get("params")) |params| {
+                        if (params == .object) {
+                            if (params.object.get("uri")) |uri_val| {
+                                if (uri_val == .string) {
+                                    self.diagnostics_waiters_mutex.lock();
+                                    defer self.diagnostics_waiters_mutex.unlock();
+                                    if (self.diagnostics_waiters.get(uri_val.string)) |event| {
+                                        event.set();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            // Notifications (diagnostics etc.) are silently dropped for now.
-            // TODO: store diagnostics for zig_diagnostics tool
         }
     }
 
@@ -278,13 +377,23 @@ pub const LspClient = struct {
         }
     }
 
-    /// Signal all pending requests (e.g., when ZLS crashes).
+    /// Signal all pending requests and diagnostics waiters (e.g., when ZLS crashes).
     fn signalAllPending(self: *LspClient) void {
-        self.pending_mutex.lock();
-        defer self.pending_mutex.unlock();
-        var it = self.pending.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.*.event.set();
+        {
+            self.pending_mutex.lock();
+            defer self.pending_mutex.unlock();
+            var it = self.pending.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.*.event.set();
+            }
+        }
+        {
+            self.diagnostics_waiters_mutex.lock();
+            defer self.diagnostics_waiters_mutex.unlock();
+            var it = self.diagnostics_waiters.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.*.set();
+            }
         }
     }
 
@@ -325,9 +434,73 @@ pub const LspClient = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pending.deinit(self.allocator);
+        // Free any remaining diagnostics waiters
+        var wit = self.diagnostics_waiters.iterator();
+        while (wit.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.diagnostics_waiters.deinit(self.allocator);
     }
 
     fn log(comptime fmt: []const u8, args: anytype) void {
         std.debug.print("[zig-mcp/lsp] " ++ fmt ++ "\n", args);
     }
 };
+
+/// Parse server capabilities from the JSON-RPC initialize response.
+/// Returns a default (all-false) struct on any parse failure.
+fn parseServerCapabilities(allocator: std.mem.Allocator, response: []const u8) ServerCapabilities {
+    var caps = ServerCapabilities{};
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch return caps;
+    defer parsed.deinit();
+
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => return caps,
+    };
+
+    const result = switch (root.get("result") orelse return caps) {
+        .object => |o| o,
+        else => return caps,
+    };
+
+    const capabilities = switch (result.get("capabilities") orelse return caps) {
+        .object => |o| o,
+        else => return caps,
+    };
+
+    caps.hover = isProviderEnabled(capabilities, "hoverProvider");
+    caps.definition = isProviderEnabled(capabilities, "definitionProvider");
+    caps.declaration = isProviderEnabled(capabilities, "declarationProvider");
+    caps.type_definition = isProviderEnabled(capabilities, "typeDefinitionProvider");
+    caps.references = isProviderEnabled(capabilities, "referencesProvider");
+    caps.completion = isProviderEnabled(capabilities, "completionProvider");
+    caps.rename = isProviderEnabled(capabilities, "renameProvider");
+    caps.document_symbol = isProviderEnabled(capabilities, "documentSymbolProvider");
+    caps.workspace_symbol = isProviderEnabled(capabilities, "workspaceSymbolProvider");
+    caps.code_action = isProviderEnabled(capabilities, "codeActionProvider");
+    caps.signature_help = isProviderEnabled(capabilities, "signatureHelpProvider");
+    caps.document_formatting = isProviderEnabled(capabilities, "documentFormattingProvider");
+
+    // If the server reported any capabilities, it's connected and can provide diagnostics
+    // via textDocument/publishDiagnostics notifications.
+    caps.diagnostics = caps.hover or caps.definition or caps.completion;
+
+    return caps;
+}
+
+/// Check if a *Provider field is enabled. LSP providers can be:
+/// - a bool (true/false)
+/// - an object (options) — presence means enabled
+/// - absent or null — disabled
+fn isProviderEnabled(capabilities: std.json.ObjectMap, key: []const u8) bool {
+    const val = capabilities.get(key) orelse return false;
+    return switch (val) {
+        .bool => |b| b,
+        .object => true,
+        .null => false,
+        else => false,
+    };
+}

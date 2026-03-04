@@ -25,6 +25,8 @@ pub const DocumentState = struct {
 
     /// Ensure a file is open in ZLS. Reads file content and sends didOpen if not already open.
     /// `file_path` can be relative (resolved against workspace) or absolute.
+    /// For newly-opened files, waits for ZLS to publish diagnostics (indicating analysis
+    /// is complete) before returning, so subsequent hover/definition requests get results.
     /// Returns a URI allocated with `ret_allocator` (caller must free).
     pub fn ensureOpen(self: *DocumentState, lsp_client: *LspClient, file_path: []const u8, ret_allocator: std.mem.Allocator) ![]const u8 {
         const abs_path = try uri_util.resolvePathWithinWorkspace(self.allocator, self.workspace_path, file_path);
@@ -51,12 +53,17 @@ pub const DocumentState = struct {
         };
         defer self.allocator.free(content);
 
+        // Register a diagnostics waiter BEFORE sending didOpen to avoid race conditions.
+        // ZLS sends textDocument/publishDiagnostics after analyzing the file.
+        const diag_event = lsp_client.registerDiagnosticsWaiter(file_uri) catch null;
+
         // Re-acquire lock, double-check, then register
         self.mutex.lock();
         defer self.mutex.unlock();
 
         // Double-check: another thread may have opened it while we were reading
         if (self.open_docs.get(file_uri)) |_| {
+            if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
             return try ret_allocator.dupe(u8, file_uri);
         }
 
@@ -88,6 +95,16 @@ pub const DocumentState = struct {
             .version = 1,
             .uri = stored_uri,
         });
+
+        // Wait for ZLS to publish initial diagnostics, indicating it has analyzed the file.
+        // This ensures subsequent hover/definition requests get meaningful results.
+        if (diag_event) |event| {
+            // Release the doc mutex while waiting so we don't block other operations
+            self.mutex.unlock();
+            event.timedWait(10 * std.time.ns_per_s) catch {};
+            self.mutex.lock();
+            lsp_client.unregisterDiagnosticsWaiter(file_uri);
+        }
 
         return try ret_allocator.dupe(u8, file_uri);
     }

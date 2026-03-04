@@ -1,7 +1,9 @@
 const std = @import("std");
 const McpTransport = @import("mcp/transport.zig").McpTransport;
 const McpServer = @import("mcp/server.zig").McpServer;
-const LspClient = @import("lsp/client.zig").LspClient;
+const lsp_client_mod = @import("lsp/client.zig");
+const LspClient = lsp_client_mod.LspClient;
+const ServerCapabilities = lsp_client_mod.ServerCapabilities;
 const ZlsProcess = @import("zls/process.zig").ZlsProcess;
 const findZls = @import("zls/process.zig").findZls;
 const Registry = @import("bridge/registry.zig").Registry;
@@ -181,7 +183,7 @@ pub fn main() !void {
     // Initialize tool registry
     var registry = Registry.init(allocator);
     defer registry.deinit();
-    try tools.registerAll(&registry);
+    try tools.registerAll(&registry, lsp_client.server_capabilities);
 
     // Initialize MCP transport
     var transport = McpTransport.init();
@@ -212,7 +214,7 @@ fn runWithoutZls(
 
     var registry = Registry.init(allocator);
     defer registry.deinit();
-    try tools.registerAll(&registry);
+    try tools.registerAll(&registry, ServerCapabilities{});
 
     var transport = McpTransport.init();
     var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, workspace, allow_command_tools, zig_path, zvm_path, zls_path);

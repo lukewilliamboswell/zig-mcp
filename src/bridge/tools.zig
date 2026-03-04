@@ -3,65 +3,79 @@ const registry = @import("registry.zig");
 const mcp_types = @import("../mcp/types.zig");
 const lsp_types = @import("../lsp/types.zig");
 const uri_util = @import("../types/uri.zig");
+const ServerCapabilities = @import("../lsp/client.zig").ServerCapabilities;
 
 const ToolContext = registry.ToolContext;
 const ToolError = registry.ToolError;
 
 /// Register all tools into the registry.
-pub fn registerAll(reg: *registry.Registry) !void {
-    try reg.register("zig_hover", handleHover, .{
+/// LSP-backed tools are conditionally registered based on server capabilities.
+/// Command tools (build, test, check, version, manage) are always registered.
+pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
+    const pos_schema = &.{
+        .{ "file", "string", "Path to the Zig source file" },
+        .{ "line", "integer", "0-based line number" },
+        .{ "character", "integer", "0-based character offset" },
+    };
+    const pos_required = &.{ "file", "line", "character" };
+
+    // ── LSP-backed tools (conditional on server capabilities) ──
+
+    if (caps.hover) try reg.register("zig_hover", handleHover, .{
         .name = "zig_hover",
         .description = "Get hover information (type info, documentation) for a symbol at a given position in a Zig file",
         .inputSchema = .{
-            .properties = try makeProps(reg.allocator, &.{
-                .{ "file", "string", "Path to the Zig source file (relative to workspace or absolute)" },
-                .{ "line", "integer", "0-based line number" },
-                .{ "character", "integer", "0-based character offset" },
-            }),
-            .required = &.{ "file", "line", "character" },
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
         },
     });
 
-    try reg.register("zig_definition", handleDefinition, .{
+    if (caps.definition) try reg.register("zig_definition", handleDefinition, .{
         .name = "zig_definition",
         .description = "Go to definition of a symbol at a given position in a Zig file",
         .inputSchema = .{
-            .properties = try makeProps(reg.allocator, &.{
-                .{ "file", "string", "Path to the Zig source file" },
-                .{ "line", "integer", "0-based line number" },
-                .{ "character", "integer", "0-based character offset" },
-            }),
-            .required = &.{ "file", "line", "character" },
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
         },
     });
 
-    try reg.register("zig_references", handleReferences, .{
+    if (caps.declaration) try reg.register("zig_declaration", handleDeclaration, .{
+        .name = "zig_declaration",
+        .description = "Go to declaration of a symbol at a given position in a Zig file",
+        .inputSchema = .{
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
+        },
+    });
+
+    if (caps.type_definition) try reg.register("zig_type_definition", handleTypeDefinition, .{
+        .name = "zig_type_definition",
+        .description = "Go to type definition of a symbol at a given position in a Zig file",
+        .inputSchema = .{
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
+        },
+    });
+
+    if (caps.references) try reg.register("zig_references", handleReferences, .{
         .name = "zig_references",
         .description = "Find all references to a symbol at a given position",
         .inputSchema = .{
-            .properties = try makeProps(reg.allocator, &.{
-                .{ "file", "string", "Path to the Zig source file" },
-                .{ "line", "integer", "0-based line number" },
-                .{ "character", "integer", "0-based character offset" },
-            }),
-            .required = &.{ "file", "line", "character" },
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
         },
     });
 
-    try reg.register("zig_completion", handleCompletion, .{
+    if (caps.completion) try reg.register("zig_completion", handleCompletion, .{
         .name = "zig_completion",
         .description = "Get completion suggestions at a given position in a Zig file",
         .inputSchema = .{
-            .properties = try makeProps(reg.allocator, &.{
-                .{ "file", "string", "Path to the Zig source file" },
-                .{ "line", "integer", "0-based line number" },
-                .{ "character", "integer", "0-based character offset" },
-            }),
-            .required = &.{ "file", "line", "character" },
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
         },
     });
 
-    try reg.register("zig_diagnostics", handleDiagnostics, .{
+    if (caps.diagnostics) try reg.register("zig_diagnostics", handleDiagnostics, .{
         .name = "zig_diagnostics",
         .description = "Get diagnostics (errors, warnings) for a Zig file by opening it in ZLS",
         .inputSchema = .{
@@ -72,7 +86,7 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_format", handleFormat, .{
+    if (caps.document_formatting) try reg.register("zig_format", handleFormat, .{
         .name = "zig_format",
         .description = "Format a Zig source file using ZLS",
         .inputSchema = .{
@@ -83,7 +97,7 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_rename", handleRename, .{
+    if (caps.rename) try reg.register("zig_rename", handleRename, .{
         .name = "zig_rename",
         .description = "Rename a symbol at a given position across the workspace",
         .inputSchema = .{
@@ -97,7 +111,7 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_document_symbols", handleDocumentSymbols, .{
+    if (caps.document_symbol) try reg.register("zig_document_symbols", handleDocumentSymbols, .{
         .name = "zig_document_symbols",
         .description = "List all symbols (functions, types, variables) defined in a Zig file",
         .inputSchema = .{
@@ -108,7 +122,7 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_workspace_symbols", handleWorkspaceSymbols, .{
+    if (caps.workspace_symbol) try reg.register("zig_workspace_symbols", handleWorkspaceSymbols, .{
         .name = "zig_workspace_symbols",
         .description = "Search for symbols across the workspace",
         .inputSchema = .{
@@ -119,7 +133,7 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_code_action", handleCodeAction, .{
+    if (caps.code_action) try reg.register("zig_code_action", handleCodeAction, .{
         .name = "zig_code_action",
         .description = "Get available code actions (quick fixes, refactors) for a range in a Zig file",
         .inputSchema = .{
@@ -134,18 +148,16 @@ pub fn registerAll(reg: *registry.Registry) !void {
         },
     });
 
-    try reg.register("zig_signature_help", handleSignatureHelp, .{
+    if (caps.signature_help) try reg.register("zig_signature_help", handleSignatureHelp, .{
         .name = "zig_signature_help",
         .description = "Get function signature help at a given position",
         .inputSchema = .{
-            .properties = try makeProps(reg.allocator, &.{
-                .{ "file", "string", "Path to the Zig source file" },
-                .{ "line", "integer", "0-based line number" },
-                .{ "character", "integer", "0-based character offset" },
-            }),
-            .required = &.{ "file", "line", "character" },
+            .properties = try makeProps(reg.allocator, pos_schema),
+            .required = pos_required,
         },
     });
+
+    // ── Command tools (always registered) ──
 
     try reg.register("zig_build", handleBuild, .{
         .name = "zig_build",
@@ -257,11 +269,23 @@ fn handleHover(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     }) catch |err| return lspToToolError(err);
     defer ctx.allocator.free(response);
 
-    // Parse result from response
     return formatHoverResponse(ctx.allocator, response) catch return ToolError.LspError;
 }
 
 fn handleDefinition(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
+    return handleLocationRequest(ctx, args, "textDocument/definition");
+}
+
+fn handleDeclaration(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
+    return handleLocationRequest(ctx, args, "textDocument/declaration");
+}
+
+fn handleTypeDefinition(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
+    return handleLocationRequest(ctx, args, "textDocument/typeDefinition");
+}
+
+/// Shared handler for definition, declaration, and typeDefinition requests.
+fn handleLocationRequest(ctx: ToolContext, args: std.json.Value, method: []const u8) ToolError![]const u8 {
     const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
     const line = getIntArg(args, "line") orelse return ToolError.InvalidParams;
     const char = getIntArg(args, "character") orelse return ToolError.InvalidParams;
@@ -274,7 +298,7 @@ fn handleDefinition(ctx: ToolContext, args: std.json.Value) ToolError![]const u8
         position: struct { line: i64, character: i64 },
     };
 
-    const response = ctx.lsp_client.sendRequest(ctx.allocator, "textDocument/definition", Params{
+    const response = ctx.lsp_client.sendRequest(ctx.allocator, method, Params{
         .textDocument = .{ .uri = file_uri },
         .position = .{ .line = line, .character = char },
     }) catch |err| return lspToToolError(err);
