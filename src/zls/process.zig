@@ -147,6 +147,13 @@ test "ZlsProcess max restart count" {
     try std.testing.expect(!can_restart);
 }
 
+/// Check if a file exists and is executable.
+fn isExecutable(path: []const u8) bool {
+    const stat = std.fs.cwd().statFile(path) catch return false;
+    // Check if any execute bit is set (owner, group, or other)
+    return (stat.mode & 0o111) != 0;
+}
+
 /// Find ZLS binary in trusted fixed locations.
 pub fn findZls(allocator: std.mem.Allocator) ![]const u8 {
     // Trusted fixed locations
@@ -155,8 +162,9 @@ pub fn findZls(allocator: std.mem.Allocator) ![]const u8 {
         "/usr/bin/zls",
     };
     for (&common_paths) |path| {
-        std.fs.accessAbsolute(path, .{}) catch continue;
-        return allocator.dupe(u8, path);
+        if (isExecutable(path)) {
+            return allocator.dupe(u8, path);
+        }
     }
 
     // Check home-relative paths
@@ -164,9 +172,19 @@ pub fn findZls(allocator: std.mem.Allocator) ![]const u8 {
         defer allocator.free(home);
         const home_bin = std.fs.path.join(allocator, &.{ home, "bin", "zls" }) catch return error.ZlsNotFound;
         defer allocator.free(home_bin);
-        std.fs.accessAbsolute(home_bin, .{}) catch return error.ZlsNotFound;
-        return allocator.dupe(u8, home_bin);
+        if (isExecutable(home_bin)) {
+            return allocator.dupe(u8, home_bin);
+        }
     } else |_| {}
 
     return error.ZlsNotFound;
+}
+
+test "isExecutable rejects non-existent paths" {
+    try std.testing.expect(!isExecutable("/nonexistent/path/to/binary"));
+}
+
+test "isExecutable accepts real executables" {
+    // /usr/bin/env is almost always present and executable on Linux
+    try std.testing.expect(isExecutable("/usr/bin/env"));
 }
