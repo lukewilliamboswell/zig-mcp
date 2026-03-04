@@ -1,12 +1,18 @@
 # Feature Ideas for zig-mcp
 
-> Research report compiled 2026-03-04.
+> Research report compiled 2026-03-04, updated with client support research.
 > Sources: [MCP Specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/),
 > [Everything Server](https://mcpservers.org/servers/modelcontextprotocol/everything),
 > [zig-wasm/zig-mcp](https://github.com/zig-wasm/zig-mcp),
 > [openSVM/zig-mcp-server](https://github.com/openSVM/zig-mcp-server),
 > [mcp.zig](https://muhammad-fiaz.github.io/mcp.zig/),
-> [MCP Official Servers](https://github.com/modelcontextprotocol/servers)
+> [MCP Official Servers](https://github.com/modelcontextprotocol/servers),
+> [VS Code Full MCP Spec](https://code.visualstudio.com/blogs/2025/06/12/full-mcp-spec-support),
+> [Cursor MCP Docs](https://docs.cursor.com/context/model-context-protocol),
+> [OpenAI Codex MCP](https://developers.openai.com/codex/mcp/),
+> [Windsurf MCP Docs](https://docs.windsurf.com/windsurf/cascade/mcp),
+> [Zed MCP Docs](https://zed.dev/docs/ai/mcp),
+> [ZLS Source](https://github.com/zigtools/zls)
 
 ---
 
@@ -19,6 +25,50 @@ zig-mcp v0.1.0 currently provides:
 - **Empty resources list**, no prompts, no sampling, no logging capability
 - **Auto-reconnect** to ZLS (up to 5 restarts), lazy document loading, degraded mode
 - **Security**: workspace-scoped paths, trusted binary policy, canonical path enforcement
+
+---
+
+## MCP Client Support Matrix
+
+Which clients actually support each MCP feature (as of March 2026):
+
+| Feature | VS Code/Copilot | Claude Code | Cursor | Windsurf | Codex CLI | Zed |
+|---------|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Tools** | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Resources** | Yes | Yes | Yes | Yes | Broken¹ | No |
+| **Prompts** | Yes | Yes | Yes | Yes | No² | Yes |
+| **Tool Annotations** | Yes | ? | No | No | No | No |
+| **Sampling** | Yes | No | No | No | No | No |
+| **Elicitation** | Yes | No | Yes | No | No | No |
+| **Logging** | Yes | ? | No | No | No | No |
+| **Progress** | Yes³ | ? | No | No | No | No |
+| **Cancellation** | Yes³ | ? | No | No | No | No |
+| **Completion** | Yes | ? | No | No | No | No |
+| **Subscriptions** | Yes | ? | Partial | No | No | No |
+| **Pagination** | ? | ? | No | No | No | No |
+| **Streamable HTTP** | Yes | Yes | ? | Yes | Yes | No |
+| **stdio** | Yes | Yes | Yes | Yes | Yes | Yes |
+
+¹ Codex calls `resources/list` during init and treats failure as server unavailability ([issue #8565](https://github.com/openai/codex/issues/8565)).
+² Open feature request ([issue #8342](https://github.com/openai/codex/issues/8342)).
+³ Part of VS Code's "full spec" claim; not independently verified.
+
+**Key takeaway**: Only **tools** are universally supported. **Resources** and **prompts** have strong support (4/6 and 5/6 clients). Everything else is VS Code-only or unsupported. Prioritize features that work for the tools+resources+prompts tier.
+
+---
+
+## ZLS LSP Capabilities (Relevant to Feature Planning)
+
+| LSP Feature | ZLS Support | Impact on Ideas |
+|---|---|---|
+| `textDocument/publishDiagnostics` (push) | Yes | #16 must aggregate from push notifications, not pull |
+| `workspace/diagnostic` (pull) | **No** | #16 effort is **Medium**, not Low — must track open files |
+| `textDocument/inlayHint` | Yes | New tool opportunity → #21 |
+| `textDocument/semanticTokens` (full + range) | Yes | Evaluated but not recommended (see below) |
+| `workspace/applyEdit` | Yes (server→client) | Enables #18 code action application |
+| `$/cancelRequest` | **No** | #7 can only cancel child processes, not LSP requests |
+| `textDocument/selectionRange` | Yes | Minor; not worth a dedicated tool |
+| `textDocument/prepareCallHierarchy` | **No** | Rules out call hierarchy tool |
 
 ---
 
@@ -114,11 +164,13 @@ zig-mcp v0.1.0 currently provides:
 
 ### 7. Request Cancellation
 
-**What**: Handle `notifications/cancelled` to abort in-progress tool calls. When a cancellation is received for a pending LSP request, forward a cancellation to ZLS (`$/cancelRequest`) and clean up. For command tools, terminate the child process.
+**What**: Handle `notifications/cancelled` to abort in-progress tool calls. For command tools (`zig_build`, `zig_test`), terminate the child process. For LSP-backed tools, drop the pending response and free resources.
 
-**Benefit**: Currently, if a user triggers a long `zig_build` or `zig_references` and changes their mind, there's no way to stop it — they must wait for the 30s timeout or the command to finish. Cancellation lets users abort immediately.
+**Caveat**: ZLS does **not** handle `$/cancelRequest` — it silently ignores cancellation notifications. This means LSP requests (hover, references, completions) cannot be truly cancelled server-side; only the MCP response can be dropped. The primary value is for **command tools** where the child process can actually be killed.
 
-**Productivity gain**: **Medium-High**. Eliminates wasted time waiting for operations the user no longer needs. Especially impactful during iterative development where the user may trigger a build, realize they forgot something, and want to cancel.
+**Benefit**: Currently, if a user triggers a long `zig_build` or `zig_test` and changes their mind, there's no way to stop it — they must wait for the timeout or the command to finish. Cancellation lets users abort command executions immediately.
+
+**Productivity gain**: **Medium**. Useful mainly for long builds/tests. LSP requests are typically fast enough that cancellation doesn't matter. Downgraded from Medium-High since LSP forwarding isn't possible.
 
 **Spec reference**: [MCP Cancellation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation)
 
@@ -231,7 +283,7 @@ zig-mcp v0.1.0 currently provides:
 
 **Benefit**: Enables agentic workflows where the server can leverage the LLM's reasoning without the user orchestrating every step. The server has deep knowledge of the Zig context (diagnostics, types, symbols) and can craft much better prompts than the user would manually.
 
-**Productivity gain**: **High** (if supported by the client). This is the most powerful feature for enabling autonomous workflows. However, not all clients support sampling, and it requires human-in-the-loop approval for safety.
+**Productivity gain**: **High in theory, near-zero in practice**. Only VS Code/Copilot supports sampling. Claude Code, Codex, Cursor, Windsurf, and Zed do not. This feature would be invisible to the vast majority of users. Also creates confusing agency boundaries — the client already *is* the LLM orchestrator, so having the server also invoke the LLM leads to unclear ownership of reasoning.
 
 **Spec reference**: [MCP Sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)
 
@@ -241,11 +293,13 @@ zig-mcp v0.1.0 currently provides:
 
 **What**: Add a `zig_diagnostics_all` tool that returns diagnostics across all open/modified files in the workspace in a single call, rather than requiring per-file `zig_diagnostics` calls.
 
+**Caveat**: ZLS does **not** support `workspace/diagnostic` (pull diagnostics). It only pushes diagnostics via `textDocument/publishDiagnostics`. Implementation requires zig-mcp to: (1) track which files have been opened in ZLS, (2) collect and cache diagnostics from push notifications, and (3) return the latest cached state on request. This makes the effort **Medium**, not Low — it requires a diagnostics cache and notification listener.
+
 **Benefit**: Currently, checking diagnostics across a project requires N separate tool calls (one per file). A single aggregated call reduces round-trips and gives the AI a complete picture of the project's health. This is especially valuable after a refactor that may break multiple files.
 
 **Productivity gain**: **High**. Reduces N tool calls to 1. In a typical refactoring session, the AI might need to check 5-20 files for breakage. This feature turns that from 5-20 round-trips into 1.
 
-**Source**: Common pattern in LSP-based MCP servers; the "Everything" reference server demonstrates comprehensive result aggregation.
+**Source**: Common pattern in LSP-based MCP servers. Requires `textDocument/publishDiagnostics` listener (push model).
 
 ---
 
@@ -306,27 +360,73 @@ zig-mcp v0.1.0 currently provides:
 
 ---
 
+### 21. Inlay Hints Tool
+
+**What**: Add a `zig_inlay_hints` tool that exposes ZLS's `textDocument/inlayHint` results. Returns inferred type annotations, parameter name hints, and other inline information for a given file or range.
+
+**Benefit**: Zig's type inference is powerful but can make code opaque — `const x = foo();` tells the AI nothing about what `x` is without hovering. Inlay hints provide this information in bulk for an entire file, giving the AI a richer understanding of types flowing through the code. This is more efficient than calling `zig_hover` on every variable individually.
+
+**Productivity gain**: **Medium-High**. Particularly valuable for understanding generic/comptime-heavy code where types are rarely explicit. One `zig_inlay_hints` call on a file replaces potentially dozens of `zig_hover` calls. Directly backed by ZLS — no additional analysis engine needed.
+
+**ZLS support**: `textDocument/inlayHint` is fully implemented.
+
+---
+
+### 22. Apply Code Action Tool
+
+**What**: Add a `zig_apply_code_action` tool that executes a code action returned by `zig_code_action`, applying the resulting workspace edits. ZLS supports `workspace/applyEdit`, which zig-mcp can intercept to capture the edits and return them as diffs.
+
+**Benefit**: Currently `zig_code_action` lists available fixes but provides no way to apply them. The AI must manually reproduce the fix, which is error-prone. This tool closes the loop: list actions → choose one → apply it. Enables automated fix-all workflows.
+
+**Productivity gain**: **Medium-High**. The most common code action workflow is "remove unused variable" or "add discard" — operations that are tedious when done manually across many locations. Automating application saves significant time in refactoring sessions.
+
+**ZLS support**: `workspace/applyEdit` is implemented (ZLS sends edit requests to the client). zig-mcp would need to act as the "client" that receives and records these edits.
+
+---
+
+## Evaluated but Not Recommended
+
+### Semantic Tokens Tool
+
+ZLS supports `textDocument/semanticTokens` (full + range), but this was evaluated and **not recommended** as an MCP tool. Semantic tokens provide syntax-level classification (keyword, function, type, variable, etc.) — information the AI can already infer from reading source code. The token data is encoded as delta arrays optimized for syntax highlighting, not human/AI consumption. Converting it to something useful would add complexity for marginal benefit. The same information is better obtained through `zig_hover` (for specific symbols) or `zig_inlay_hints` (for bulk type info).
+
+### Call Hierarchy Tool
+
+ZLS does **not** support `textDocument/prepareCallHierarchy`. This rules out a call hierarchy tool. The same information can be partially obtained through `zig_references` (finding all callers of a function).
+
+---
+
 ## Priority Matrix
 
-| # | Feature | Productivity | Effort | Recommendation |
-|---|---------|-------------|--------|----------------|
-| 1 | Workspace Resources | High | Medium | **Do first** — unlocks resources capability |
-| 4 | Prompts | High | Medium | **Do first** — high user visibility |
-| 9 | Std Library Docs | High | Medium | **Do first** — fills critical knowledge gap |
-| 16 | Multi-File Diagnostics | High | Low | **Do first** — low effort, high payoff |
-| 7 | Request Cancellation | Medium-High | Low | **Do soon** — small change, big UX win |
-| 14 | Tool Annotations | Medium | Low | **Do soon** — trivial to add, reduces friction |
-| 5 | Structured Logging | Medium | Low-Medium | **Do soon** — aids debugging |
-| 6 | Progress Notifications | Medium | Medium | **Do soon** — improves perceived speed |
-| 15 | Sampling | High | High | **Explore** — powerful but complex, client support varies |
-| 2 | Resource Subscriptions | Medium | Medium | **Later** — builds on #1 |
-| 3 | Resource Templates | Medium | Medium | **Later** — builds on #1 |
-| 12 | Completion/Autocomplete | Medium | Medium | **Later** — builds on #3, #4 |
-| 10 | Build Analysis | Medium | Medium | **Later** — nice-to-have |
-| 17 | Symbol Search Filtering | Medium | Low | **Later** — incremental improvement |
-| 18 | Code Action Preview | Medium | Medium | **Later** — incremental improvement |
-| 11 | Code Optimization | Medium | High | **Later** — complex, overlaps with AI advice |
-| 8 | HTTP Transport | Medium | High | **Later** — only needed for remote workflows |
-| 13 | Pagination | Low-Medium | Medium | **Later** — robustness improvement |
-| 19 | Dependency Graph | Low-Medium | Low | **Later** — convenience feature |
-| 20 | Elicitation | Low-Medium | Medium | **Later** — edge case improvement |
+Revised with client support research and ZLS capability verification. Features are prioritized by: (1) how many clients can actually use them, (2) real productivity gain, (3) implementation effort accounting for ZLS limitations.
+
+| # | Feature | Clients | Productivity | Effort | Recommendation |
+|---|---------|---------|-------------|--------|----------------|
+| 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Do first** — trivial metadata, no runtime changes |
+| 4 | Prompts | 5/6 | High | Medium | **Do first** — broadest client support after tools |
+| 1 | Workspace Resources | 4/6 | High | Medium | **Do first** — unlocks resources capability |
+| 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Do first** — tool, so universally supported; backed by ZLS |
+| 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Do soon** — completes code action workflow |
+| 16 | Multi-File Diagnostics | 6/6¹ | High | Medium² | **Do soon** — high payoff but needs diagnostics cache |
+| 7 | Request Cancellation | ?/6 | Medium | Low | **Do soon** — command-tool cancellation only (ZLS ignores `$/cancelRequest`) |
+| 5 | Structured Logging | 1-2/6 | Medium | Low-Medium | **Do soon** — aids debugging, low client support but useful on stderr too |
+| 6 | Progress Notifications | 1-2/6 | Medium | Medium | **Do soon** — improves perceived speed |
+| 9 | Std Library Docs | 4-6/6³ | High | **High**⁴ | **Reassess** — high value but high effort; `zig_hover` already provides per-symbol docs |
+| 3 | Resource Templates | 4/6 | Medium | Medium | **Later** — builds on #1 |
+| 2 | Resource Subscriptions | 1-2/6 | Medium | Medium | **Later** — builds on #1, few clients support it |
+| 12 | Completion/Autocomplete | 1-2/6 | Medium | Medium | **Later** — builds on #3, #4; VS Code only |
+| 17 | Symbol Search Filtering | 6/6¹ | Medium | Low | **Later** — incremental improvement |
+| 10 | Build Analysis | 6/6¹ | Medium | Medium | **Later** — nice-to-have |
+| 18 | Code Action Preview | 6/6¹ | Medium | Medium | **Later** — partially superseded by #22 |
+| 8 | HTTP Transport | 4/6 | Medium | High | **Later** — only needed for remote workflows |
+| 20 | Elicitation | 2/6 | Low-Medium | Medium | **Later** — VS Code + Cursor only |
+| 19 | Dependency Graph | 4/6 | Low-Medium | Low | **Later** — convenience feature |
+| 13 | Pagination | ?/6 | Low-Medium | Medium | **Later** — robustness improvement |
+| 11 | Code Optimization | 6/6¹ | Low | High | **Deprioritize** — overlaps with what the LLM already does |
+| 15 | Sampling | 1/6 | Near-zero⁵ | High | **Deprioritize** — VS Code only, confusing agency model |
+
+¹ Tool-based features work with all clients since all support tools.
+² Upgraded from Low — ZLS lacks pull diagnostics; requires push notification cache.
+³ Could be tools (6/6) or resources (4/6) depending on implementation.
+⁴ Upgraded from Medium — requires HTML doc scraping/parsing, version matching, caching infrastructure. This is effectively a standalone subsystem.
+⁵ Downgraded — only VS Code supports sampling; all other clients ignore this capability entirely.
