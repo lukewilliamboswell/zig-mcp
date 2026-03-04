@@ -1,4 +1,5 @@
 const std = @import("std");
+const FileSystem = @import("../fs.zig").FileSystem;
 
 /// Convert a file system path to a file:// URI.
 /// Caller owns the returned memory.
@@ -85,14 +86,22 @@ pub fn resolvePath(allocator: std.mem.Allocator, workspace: []const u8, relative
 
 /// Resolve a path and enforce that it stays within the canonical workspace root.
 /// Returns canonical absolute path on success.
-pub fn resolvePathWithinWorkspace(allocator: std.mem.Allocator, workspace: []const u8, file_path: []const u8) ![]const u8 {
+pub fn resolvePathWithinWorkspace(allocator: std.mem.Allocator, workspace: []const u8, file_path: []const u8, fs: FileSystem) ![]const u8 {
     const abs_path = try resolvePath(allocator, workspace, file_path);
     defer allocator.free(abs_path);
 
-    const canonical_workspace = try std.fs.cwd().realpathAlloc(allocator, workspace);
+    const canonical_workspace = fs.realpathAlloc(allocator, workspace) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RealpathFailed => return error.FileNotFound,
+    };
     defer allocator.free(canonical_workspace);
 
-    const canonical_path = try std.fs.cwd().realpathAlloc(allocator, abs_path);
+    const canonical_path = fs.realpathAlloc(allocator, abs_path) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RealpathFailed => return error.FileNotFound,
+    };
     errdefer allocator.free(canonical_path);
 
     if (!isWithinRoot(canonical_workspace, canonical_path)) {
@@ -197,19 +206,28 @@ test "resolvePath joins relative to workspace" {
 
 test "resolvePathWithinWorkspace accepts path inside root" {
     const allocator = std.testing.allocator;
-    const result = try resolvePathWithinWorkspace(allocator, "/tmp", "/tmp");
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
+    const fs = os_fs.filesystem();
+    const result = try resolvePathWithinWorkspace(allocator, "/tmp", "/tmp", fs);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("/tmp", result);
 }
 
 test "resolvePathWithinWorkspace rejects absolute path outside root" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/etc/passwd"));
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
+    const fs = os_fs.filesystem();
+    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/etc/passwd", fs));
 }
 
 test "resolvePathWithinWorkspace rejects traversal outside root" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/tmp/../etc/passwd"));
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
+    const fs = os_fs.filesystem();
+    try std.testing.expectError(error.PathOutsideWorkspace, resolvePathWithinWorkspace(allocator, "/tmp", "/tmp/../etc/passwd", fs));
 }
 
 test "uri with spaces" {

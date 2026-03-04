@@ -2,6 +2,7 @@ const std = @import("std");
 const mcp_types = @import("../mcp/types.zig");
 const uri_util = @import("../types/uri.zig");
 const Workspace = @import("../state/workspace.zig").Workspace;
+const FileSystem = @import("../fs.zig").FileSystem;
 
 /// Context passed to resource handlers.
 pub const ResourceContext = struct {
@@ -9,6 +10,7 @@ pub const ResourceContext = struct {
     workspace: *const Workspace,
     zig_path: ?[]const u8,
     zls_path: ?[]const u8,
+    fs: FileSystem,
 };
 
 pub const ResourceError = error{
@@ -68,7 +70,7 @@ fn readProjectInfo(ctx: ResourceContext) ResourceError![]const u8 {
     // Try to read build.zig.zon
     const zon_path = std.fs.path.join(ctx.allocator, &.{ ctx.workspace.root_path, "build.zig.zon" }) catch return error.OutOfMemory;
     defer ctx.allocator.free(zon_path);
-    const zon_content: []const u8 = std.fs.cwd().readFileAlloc(ctx.allocator, zon_path, 1024 * 1024) catch
+    const zon_content: []const u8 = ctx.fs.readFileAlloc(ctx.allocator, zon_path, 1024 * 1024) catch
         (ctx.allocator.dupe(u8, "(not found)") catch return error.OutOfMemory);
     defer ctx.allocator.free(zon_content);
 
@@ -85,13 +87,13 @@ fn readFileResource(ctx: ResourceContext, resource_uri: []const u8) ResourceErro
     const file_path = uri_util.uriToPath(ctx.allocator, resource_uri) catch return error.ReadFailed;
     defer ctx.allocator.free(file_path);
 
-    const canonical = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file_path) catch |err| switch (err) {
+    const canonical = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file_path, ctx.fs) catch |err| switch (err) {
         error.PathOutsideWorkspace => return error.PathOutsideWorkspace,
         else => return error.ReadFailed,
     };
     defer ctx.allocator.free(canonical);
 
-    return std.fs.cwd().readFileAlloc(ctx.allocator, canonical, 4 * 1024 * 1024) catch return error.ReadFailed;
+    return ctx.fs.readFileAlloc(ctx.allocator, canonical, 4 * 1024 * 1024) catch return error.ReadFailed;
 }
 
 fn runVersionCommand(allocator: std.mem.Allocator, binary: []const u8, arg: []const u8) ![]const u8 {
@@ -129,11 +131,14 @@ test "readResource returns error for unknown URI" {
         .root_uri = "file:///tmp",
         .allocator = std.testing.allocator,
     };
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
     const ctx = ResourceContext{
         .allocator = std.testing.allocator,
         .workspace = &workspace,
         .zig_path = null,
         .zls_path = null,
+        .fs = os_fs.filesystem(),
     };
     try std.testing.expectError(error.ResourceNotFound, readResource(ctx, "zig://unknown"));
 }

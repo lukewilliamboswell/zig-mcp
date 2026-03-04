@@ -4,6 +4,7 @@ const uri_util = @import("../types/uri.zig");
 const Workspace = @import("../state/workspace.zig").Workspace;
 const LspClient = @import("../lsp/client.zig").LspClient;
 const DocumentState = @import("../state/documents.zig").DocumentState;
+const FileSystem = @import("../fs.zig").FileSystem;
 
 /// Context passed to prompt handlers.
 pub const PromptContext = struct {
@@ -12,6 +13,7 @@ pub const PromptContext = struct {
     lsp_client: *LspClient,
     doc_state: *DocumentState,
     zig_path: ?[]const u8,
+    fs: FileSystem,
 };
 
 pub const PromptError = error{
@@ -306,9 +308,9 @@ fn getIntArg(args: std.json.Value, key: []const u8) ?i64 {
 }
 
 fn readFileInWorkspace(ctx: PromptContext, file_path: []const u8) ?[]const u8 {
-    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file_path) catch return null;
+    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file_path, ctx.fs) catch return null;
     defer ctx.allocator.free(abs_path);
-    return std.fs.cwd().readFileAlloc(ctx.allocator, abs_path, 4 * 1024 * 1024) catch null;
+    return ctx.fs.readFileAlloc(ctx.allocator, abs_path, 4 * 1024 * 1024) catch null;
 }
 
 fn singleUserMessage(allocator: std.mem.Allocator, aw: *std.Io.Writer.Allocating) PromptError![]const mcp_types.PromptMessage {
@@ -443,7 +445,7 @@ fn symbolKindName(kind: i64) []const u8 {
 /// Try to run zig ast-check on a file. Returns null on any failure.
 fn runAstCheck(ctx: PromptContext, file: []const u8) ?[]const u8 {
     const zig_path = ctx.zig_path orelse return null;
-    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file) catch return null;
+    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file, ctx.fs) catch return null;
     defer ctx.allocator.free(abs_path);
 
     const result = std.process.Child.run(.{
@@ -507,7 +509,9 @@ test "getPrompt returns PromptNotFound for unknown name" {
     };
     var lsp_client = @import("../lsp/client.zig").LspClient.init(std.testing.allocator);
     defer lsp_client.deinit();
-    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp");
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
+    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", os_fs.filesystem());
     defer doc_state.deinit();
 
     const ctx = PromptContext{
@@ -516,6 +520,7 @@ test "getPrompt returns PromptNotFound for unknown name" {
         .lsp_client = &lsp_client,
         .doc_state = &doc_state,
         .zig_path = null,
+        .fs = os_fs.filesystem(),
     };
     try std.testing.expectError(error.PromptNotFound, getPrompt(ctx, "nonexistent", .null));
 }
@@ -528,7 +533,9 @@ test "getPrompt review returns InvalidParams without file" {
     };
     var lsp_client = @import("../lsp/client.zig").LspClient.init(std.testing.allocator);
     defer lsp_client.deinit();
-    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp");
+    const OsFileSystem2 = @import("../fs.zig").OsFileSystem;
+    const os_fs2: OsFileSystem2 = .{};
+    var doc_state = @import("../state/documents.zig").DocumentState.init(std.testing.allocator, "/tmp", os_fs2.filesystem());
     defer doc_state.deinit();
 
     const ctx = PromptContext{
@@ -537,6 +544,7 @@ test "getPrompt review returns InvalidParams without file" {
         .lsp_client = &lsp_client,
         .doc_state = &doc_state,
         .zig_path = null,
+        .fs = os_fs2.filesystem(),
     };
     try std.testing.expectError(error.InvalidParams, getPrompt(ctx, "review", .null));
 }

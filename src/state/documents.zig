@@ -1,6 +1,7 @@
 const std = @import("std");
 const LspClient = @import("../lsp/client.zig").LspClient;
 const uri_util = @import("../types/uri.zig");
+const FileSystem = @import("../fs.zig").FileSystem;
 
 const log = std.log.scoped(.docs);
 
@@ -10,17 +11,19 @@ pub const DocumentState = struct {
     open_docs: std.StringHashMapUnmanaged(DocInfo),
     allocator: std.mem.Allocator,
     workspace_path: []const u8,
+    fs: FileSystem,
     mutex: std.Thread.Mutex = .{},
 
     const DocInfo = struct {
         version: i64,
     };
 
-    pub fn init(allocator: std.mem.Allocator, workspace_path: []const u8) DocumentState {
+    pub fn init(allocator: std.mem.Allocator, workspace_path: []const u8, fs: FileSystem) DocumentState {
         return .{
             .open_docs = .empty,
             .allocator = allocator,
             .workspace_path = workspace_path,
+            .fs = fs,
         };
     }
 
@@ -30,7 +33,7 @@ pub const DocumentState = struct {
     /// is complete) before returning, so subsequent hover/definition requests get results.
     /// Returns a URI allocated with `ret_allocator` (caller must free).
     pub fn ensureOpen(self: *DocumentState, lsp_client: *LspClient, file_path: []const u8, ret_allocator: std.mem.Allocator) ![]const u8 {
-        const abs_path = try uri_util.resolvePathWithinWorkspace(self.allocator, self.workspace_path, file_path);
+        const abs_path = try uri_util.resolvePathWithinWorkspace(self.allocator, self.workspace_path, file_path, self.fs);
         defer self.allocator.free(abs_path);
 
         const file_uri = try uri_util.pathToUri(self.allocator, abs_path);
@@ -46,7 +49,7 @@ pub const DocumentState = struct {
         }
 
         // Slow path: read file content outside the lock (no mutex held during I/O)
-        const content = std.fs.cwd().readFileAlloc(self.allocator, abs_path, 10 * 1024 * 1024) catch |err| {
+        const content = self.fs.readFileAlloc(self.allocator, abs_path, 10 * 1024 * 1024) catch |err| {
             return switch (err) {
                 error.FileNotFound => error.FileNotFound,
                 else => error.FileReadError,
@@ -147,7 +150,7 @@ pub const DocumentState = struct {
             };
             defer self.allocator.free(path);
 
-            const content = std.fs.cwd().readFileAlloc(self.allocator, path, 10 * 1024 * 1024) catch {
+            const content = self.fs.readFileAlloc(self.allocator, path, 10 * 1024 * 1024) catch {
                 log.err("Failed to re-read {s} for reopen", .{path});
                 continue;
             };
@@ -200,7 +203,9 @@ test "uriToPath correctly decodes percent-encoded URIs used by reopenAll" {
 
 test "DocumentState init and deinit" {
     const allocator = std.testing.allocator;
-    var ds = DocumentState.init(allocator, "/tmp/workspace");
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
+    var ds = DocumentState.init(allocator, "/tmp/workspace", os_fs.filesystem());
     defer ds.deinit();
     try std.testing.expectEqualStrings("/tmp/workspace", ds.workspace_path);
 }

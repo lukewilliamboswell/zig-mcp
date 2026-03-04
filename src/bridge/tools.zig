@@ -584,7 +584,7 @@ fn handleTest(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     const filter = getStringArg(args, "filter");
 
     if (file) |f| {
-        const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, f) catch |err| return pathToToolError(err);
+        const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, f, ctx.fs) catch |err| return pathToToolError(err);
         defer ctx.allocator.free(abs_path);
 
         // zig test <file> [--test-filter <filter>]
@@ -607,7 +607,7 @@ fn handleCheck(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     try requireCommandTools(ctx);
     const zig_path = commandBinary(ctx.zig_path) orelse return ToolError.CommandFailed;
     const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
-    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file) catch |err| return pathToToolError(err);
+    const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file, ctx.fs) catch |err| return pathToToolError(err);
     defer ctx.allocator.free(abs_path);
     return runZigCommandArgs(ctx.allocator, zig_path, ctx.workspace.root_path, &.{ "ast-check", abs_path }) catch return ToolError.CommandFailed;
 }
@@ -1299,7 +1299,6 @@ fn pathToToolError(err: anytype) ToolError {
         error.PathOutsideWorkspace => ToolError.PathOutsideWorkspace,
         error.FileNotFound => ToolError.FileNotFound,
         error.OutOfMemory => ToolError.OutOfMemory,
-        else => ToolError.CommandFailed,
     };
 }
 
@@ -1352,6 +1351,8 @@ test "getIntArg from non-object returns null" {
 
 test "requireCommandTools enforces policy" {
     const alloc = std.testing.allocator;
+    const OsFileSystem = @import("../fs.zig").OsFileSystem;
+    const os_fs: OsFileSystem = .{};
     const ctx = ToolContext{
         .lsp_client = undefined,
         .doc_state = undefined,
@@ -1361,6 +1362,7 @@ test "requireCommandTools enforces policy" {
         .zig_path = null,
         .zvm_path = null,
         .zls_path = null,
+        .fs = os_fs.filesystem(),
     };
     try std.testing.expectError(ToolError.CommandToolsDisabled, requireCommandTools(ctx));
 }

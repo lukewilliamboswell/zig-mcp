@@ -13,6 +13,7 @@ const DocumentState = @import("state/documents.zig").DocumentState;
 const Workspace = @import("state/workspace.zig").Workspace;
 const uri_util = @import("types/uri.zig");
 const binary_policy = @import("security/binary_policy.zig");
+const OsFileSystem = @import("fs.zig").OsFileSystem;
 
 // Pull in test references
 comptime {
@@ -33,6 +34,7 @@ comptime {
     _ = @import("cmd/zig_runner.zig");
     _ = @import("cmd/zvm.zig");
     _ = @import("security/binary_policy.zig");
+    _ = @import("fs.zig");
 }
 
 const log = std.log.scoped(.default);
@@ -180,8 +182,12 @@ pub fn main() !void {
     allocator.free(init_response);
     log.info("LSP session initialized", .{});
 
+    // Initialize filesystem abstraction
+    const os_fs: OsFileSystem = .{};
+    const fs = os_fs.filesystem();
+
     // Initialize document state
-    var doc_state = DocumentState.init(allocator, workspace.root_path);
+    var doc_state = DocumentState.init(allocator, workspace.root_path, fs);
     defer doc_state.deinit();
 
     // Initialize tool registry
@@ -193,7 +199,7 @@ pub fn main() !void {
     var transport = McpTransport.init();
 
     // Run MCP server (with ZLS process for auto-reconnect on crash)
-    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, &workspace, allow_command_tools, zig_path, zvm_path, zls_path);
+    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, &workspace, allow_command_tools, zig_path, zvm_path, zls_path, fs);
     server.zls_process = &zls_proc;
     log.info("Server ready, waiting for MCP messages on stdin", .{});
     try server.run();
@@ -210,7 +216,10 @@ fn runWithoutZls(
     zvm_path: ?[]const u8,
     zls_path: ?[]const u8,
 ) !void {
-    var doc_state = DocumentState.init(allocator, workspace.root_path);
+    const os_fs: OsFileSystem = .{};
+    const fs = os_fs.filesystem();
+
+    var doc_state = DocumentState.init(allocator, workspace.root_path, fs);
     defer doc_state.deinit();
 
     var lsp_client = LspClient.init(allocator);
@@ -221,7 +230,7 @@ fn runWithoutZls(
     try tools.registerAll(&registry, ServerCapabilities{});
 
     var transport = McpTransport.init();
-    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, workspace, allow_command_tools, zig_path, zvm_path, zls_path);
+    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, workspace, allow_command_tools, zig_path, zvm_path, zls_path, fs);
     log.info("Running without ZLS (command tools only)", .{});
     try server.run();
 }

@@ -12,6 +12,7 @@ const resources = @import("../bridge/resources.zig");
 const ResourceContext = resources.ResourceContext;
 const prompts = @import("../bridge/prompts.zig");
 const PromptContext = prompts.PromptContext;
+const FileSystem = @import("../fs.zig").FileSystem;
 
 const log = std.log.scoped(.mcp_server);
 
@@ -45,6 +46,7 @@ pub const McpServer = struct {
     zig_path: ?[]const u8 = null,
     zvm_path: ?[]const u8 = null,
     zls_path: ?[]const u8 = null,
+    fs: FileSystem,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -57,6 +59,7 @@ pub const McpServer = struct {
         zig_path: ?[]const u8,
         zvm_path: ?[]const u8,
         zls_path: ?[]const u8,
+        fs: FileSystem,
     ) McpServer {
         return .{
             .transport = transport,
@@ -69,6 +72,7 @@ pub const McpServer = struct {
             .zig_path = zig_path,
             .zvm_path = zvm_path,
             .zls_path = zls_path,
+            .fs = fs,
         };
     }
 
@@ -346,6 +350,7 @@ pub const McpServer = struct {
             .zig_path = self.zig_path,
             .zvm_path = self.zvm_path,
             .zls_path = self.zls_path,
+            .fs = self.fs,
         };
 
         const result_text = handler(ctx, tool_args) catch |err| {
@@ -525,6 +530,7 @@ pub const McpServer = struct {
             .workspace = self.workspace,
             .zig_path = self.zig_path,
             .zls_path = self.zls_path,
+            .fs = self.fs,
         };
 
         const content_text = resources.readResource(ctx, resource_uri) catch |err| {
@@ -654,6 +660,7 @@ pub const McpServer = struct {
             .lsp_client = self.lsp_client,
             .doc_state = self.doc_state,
             .zig_path = self.zig_path,
+            .fs = self.fs,
         };
 
         const messages = prompts.getPrompt(ctx, prompt_name, arguments) catch |err| {
