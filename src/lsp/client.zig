@@ -1,6 +1,7 @@
 const std = @import("std");
 const LspTransport = @import("transport.zig").LspTransport;
 const json_rpc = @import("../types/json_rpc.zig");
+const DiagnosticsCache = @import("../state/diagnostics.zig").DiagnosticsCache;
 
 /// Pending request waiting for a response from ZLS.
 const PendingRequest = struct {
@@ -43,7 +44,7 @@ pub const LspClient = struct {
     reader_thread: ?std.Thread = null,
     allocator: std.mem.Allocator,
     notification_callback: ?*const fn (method: []const u8, params: ?std.json.Value) void = null,
-    diagnostics_callback: ?*const fn ([]const u8, []const u8) void = null,
+    diagnostics_cache: ?*DiagnosticsCache = null,
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     stderr_thread: ?std.Thread = null,
     zls_stderr: ?std.fs.File = null,
@@ -346,11 +347,21 @@ pub const LspClient = struct {
                     const stdin = self.zls_stdin orelse continue;
                     LspTransport.writeMessage(stdin, err_resp) catch {};
                 } else if (std.mem.eql(u8, method, "textDocument/publishDiagnostics")) {
-                    // Signal any waiter registered for this URI
+                    // Cache diagnostics and signal any waiter registered for this URI
                     if (obj.get("params")) |params| {
                         if (params == .object) {
                             if (params.object.get("uri")) |uri_val| {
                                 if (uri_val == .string) {
+                                    // Cache the diagnostics array before signaling waiter
+                                    if (self.diagnostics_cache) |cache| {
+                                        if (params.object.get("diagnostics")) |diag_val| {
+                                            if (stringifyJson(self.allocator, diag_val)) |json_str| {
+                                                cache.put(uri_val.string, json_str);
+                                                self.allocator.free(json_str);
+                                            }
+                                        }
+                                    }
+
                                     self.diagnostics_waiters_mutex.lock();
                                     defer self.diagnostics_waiters_mutex.unlock();
                                     if (self.diagnostics_waiters.get(uri_val.string)) |event| {
@@ -481,6 +492,23 @@ pub const LspClient = struct {
 
     const log = std.log.scoped(.lsp);
 };
+
+/// Serialize a std.json.Value to an owned JSON string.
+fn stringifyJson(allocator: std.mem.Allocator, value: std.json.Value) ?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    var jw: std.json.Stringify = .{
+        .writer = &aw.writer,
+        .options = .{},
+    };
+    jw.write(value) catch {
+        aw.deinit();
+        return null;
+    };
+    return aw.toOwnedSlice() catch {
+        aw.deinit();
+        return null;
+    };
+}
 
 /// Parse server capabilities from the JSON-RPC initialize response.
 /// Returns a default (all-false) struct on any parse failure.

@@ -5,6 +5,7 @@ const LspClient = @import("../lsp/client.zig").LspClient;
 const DocumentState = @import("../state/documents.zig").DocumentState;
 const Workspace = @import("../state/workspace.zig").Workspace;
 const FileSystem = @import("../fs.zig").FileSystem;
+const DiagnosticsCache = @import("../state/diagnostics.zig").DiagnosticsCache;
 
 /// Context passed to every tool handler.
 pub const ToolContext = struct {
@@ -17,6 +18,7 @@ pub const ToolContext = struct {
     zvm_path: ?[]const u8,
     zls_path: ?[]const u8,
     fs: FileSystem,
+    diagnostics_cache: ?*DiagnosticsCache = null,
 };
 
 /// A tool handler function.

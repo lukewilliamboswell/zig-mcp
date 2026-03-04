@@ -10,6 +10,7 @@ const findZls = @import("zls/process.zig").findZls;
 const Registry = @import("bridge/registry.zig").Registry;
 const tools = @import("bridge/tools.zig");
 const DocumentState = @import("state/documents.zig").DocumentState;
+const DiagnosticsCache = @import("state/diagnostics.zig").DiagnosticsCache;
 const Workspace = @import("state/workspace.zig").Workspace;
 const uri_util = @import("types/uri.zig");
 const binary_policy = @import("security/binary_policy.zig");
@@ -29,6 +30,7 @@ comptime {
     _ = @import("bridge/resources.zig");
     _ = @import("bridge/prompts.zig");
     _ = @import("state/documents.zig");
+    _ = @import("state/diagnostics.zig");
     _ = @import("state/workspace.zig");
     _ = @import("zls/process.zig");
     _ = @import("lsp/client.zig");
@@ -154,9 +156,14 @@ pub fn main() !void {
         return runWithoutZls(allocator, &workspace, allow_command_tools, zig_path, zvm_path, null);
     };
 
+    // Initialize diagnostics cache
+    var diagnostics_cache = DiagnosticsCache.init(allocator);
+    defer diagnostics_cache.deinit();
+
     // Initialize LSP client
     var lsp_client = LspClient.init(allocator);
     defer lsp_client.deinit();
+    lsp_client.diagnostics_cache = &diagnostics_cache;
 
     const zls_stdin = zls_proc.getStdin() orelse {
         log.err("Failed to get ZLS stdin pipe", .{});
@@ -189,6 +196,7 @@ pub fn main() !void {
     // Initialize document state
     var doc_state = DocumentState.init(allocator, workspace.root_path, fs);
     defer doc_state.deinit();
+    doc_state.diagnostics_cache = &diagnostics_cache;
 
     // Initialize tool registry
     var registry = Registry.init(allocator);
@@ -201,6 +209,7 @@ pub fn main() !void {
     // Run MCP server (with ZLS process for auto-reconnect on crash)
     var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, &workspace, allow_command_tools, zig_path, zvm_path, zls_path, fs);
     server.zls_process = &zls_proc;
+    server.diagnostics_cache = &diagnostics_cache;
     log.info("Server ready, waiting for MCP messages on stdin", .{});
     try server.run();
 

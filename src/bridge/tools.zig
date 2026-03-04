@@ -5,6 +5,7 @@ const lsp_types = @import("../lsp/types.zig");
 const uri_util = @import("../types/uri.zig");
 const workspace_edit = @import("workspace_edit.zig");
 const ServerCapabilities = @import("../lsp/client.zig").ServerCapabilities;
+const DiagnosticsCache = @import("../state/diagnostics.zig").DiagnosticsCache;
 
 const ToolContext = registry.ToolContext;
 const ToolError = registry.ToolError;
@@ -94,6 +95,15 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
                 .{ "file", "string", "Path to the Zig source file" },
             }),
             .required = &.{"file"},
+        },
+        .annotations = read_only,
+    });
+
+    if (caps.diagnostics) try reg.register("zig_diagnostics_all", handleDiagnosticsAll, .{
+        .name = "zig_diagnostics_all",
+        .description = "Get diagnostics (errors, warnings) for all files previously opened in the current ZLS session",
+        .inputSchema = .{
+            .properties = .{ .object = std.json.ObjectMap.init(reg.allocator) },
         },
         .annotations = read_only,
     });
@@ -387,18 +397,160 @@ fn handleCompletion(ctx: ToolContext, args: std.json.Value) ToolError![]const u8
 fn handleDiagnostics(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
     const file = getStringArg(args, "file") orelse return ToolError.InvalidParams;
 
-    // Opening the file triggers ZLS to compute diagnostics
+    // Opening the file triggers ZLS to compute diagnostics and waits for the first notification
     const file_uri = ctx.doc_state.ensureOpen(ctx.lsp_client, file, ctx.allocator) catch |err| return openPathToToolError(err);
     defer ctx.allocator.free(file_uri);
 
-    // Give ZLS a moment to compute diagnostics, then request them via
-    // a dummy hover (ZLS sends diagnostics as notifications, but we
-    // can also just report "diagnostics sent, check your editor" or
-    // use a pull-based approach if ZLS supports it)
-    //
-    // For now, return a message that the file has been opened and diagnostics
-    // will appear via textDocument/publishDiagnostics notification
-    return ctx.allocator.dupe(u8, "File opened in ZLS. Diagnostics are sent asynchronously by ZLS. Use zig_check for synchronous syntax checking.") catch return ToolError.OutOfMemory;
+    // Read cached diagnostics
+    const cache = ctx.diagnostics_cache orelse {
+        return ctx.allocator.dupe(u8, "Diagnostics cache not available") catch return ToolError.OutOfMemory;
+    };
+
+    const diag_json = cache.get(ctx.allocator, file_uri) orelse {
+        return ctx.allocator.dupe(u8, "No issues found") catch return ToolError.OutOfMemory;
+    };
+    defer ctx.allocator.free(diag_json);
+
+    return formatDiagnosticsForUri(ctx.allocator, file_uri, diag_json) catch return ToolError.OutOfMemory;
+}
+
+fn handleDiagnosticsAll(ctx: ToolContext, _: std.json.Value) ToolError![]const u8 {
+    const cache = ctx.diagnostics_cache orelse {
+        return ctx.allocator.dupe(u8, "Diagnostics cache not available") catch return ToolError.OutOfMemory;
+    };
+
+    const entries = cache.getAll(ctx.allocator) orelse {
+        return ctx.allocator.dupe(u8, "No diagnostics cached. Open files first using other tools (hover, definition, diagnostics, etc.)") catch return ToolError.OutOfMemory;
+    };
+    defer {
+        for (entries) |e| {
+            ctx.allocator.free(e.uri);
+            ctx.allocator.free(e.diagnostics_json);
+        }
+        ctx.allocator.free(entries);
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
+    var any_diagnostics = false;
+
+    for (entries) |entry| {
+        const formatted = formatDiagnosticsForUri(ctx.allocator, entry.uri, entry.diagnostics_json) catch continue;
+        defer ctx.allocator.free(formatted);
+        if (formatted.len > 0) {
+            if (any_diagnostics) {
+                aw.writer.writeByte('\n') catch {
+                    aw.deinit();
+                    return ToolError.OutOfMemory;
+                };
+            }
+            aw.writer.writeAll(formatted) catch {
+                aw.deinit();
+                return ToolError.OutOfMemory;
+            };
+            any_diagnostics = true;
+        }
+    }
+
+    if (!any_diagnostics) {
+        aw.deinit();
+        return ctx.allocator.dupe(u8, "No issues found in any open files") catch return ToolError.OutOfMemory;
+    }
+
+    return aw.toOwnedSlice() catch {
+        aw.deinit();
+        return ToolError.OutOfMemory;
+    };
+}
+
+/// Format a diagnostics JSON array into human-readable lines.
+/// Returns "No issues found in {path}" for empty arrays, or "{path}:{line}:{col}: {severity}: {message}" lines.
+fn formatDiagnosticsForUri(allocator: std.mem.Allocator, file_uri: []const u8, diagnostics_json: []const u8) ![]const u8 {
+    // Convert URI to file path for display
+    const file_path = uri_util.uriToPath(allocator, file_uri) catch file_uri;
+    const free_path = !std.mem.eql(u8, file_path, file_uri);
+    defer if (free_path) allocator.free(file_path);
+
+    // Parse the diagnostics JSON array
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, diagnostics_json, .{}) catch {
+        return try allocator.dupe(u8, "Failed to parse diagnostics");
+    };
+    defer parsed.deinit();
+
+    const diags = switch (parsed.value) {
+        .array => |a| a.items,
+        else => return try allocator.dupe(u8, "Invalid diagnostics format"),
+    };
+
+    if (diags.len == 0) {
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        aw.writer.print("No issues found in {s}", .{file_path}) catch {
+            aw.deinit();
+            return error.OutOfMemory;
+        };
+        return aw.toOwnedSlice() catch {
+            aw.deinit();
+            return error.OutOfMemory;
+        };
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+
+    for (diags, 0..) |diag, i| {
+        if (i > 0) aw.writer.writeByte('\n') catch {
+            aw.deinit();
+            return error.OutOfMemory;
+        };
+
+        const obj = switch (diag) {
+            .object => |o| o,
+            else => continue,
+        };
+
+        // Extract position from range.start
+        var line: i64 = 0;
+        var col: i64 = 0;
+        if (obj.get("range")) |range_val| {
+            if (range_val == .object) {
+                if (range_val.object.get("start")) |start_val| {
+                    if (start_val == .object) {
+                        if (start_val.object.get("line")) |l| {
+                            if (l == .integer) line = l.integer;
+                        }
+                        if (start_val.object.get("character")) |c| {
+                            if (c == .integer) col = c.integer;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Severity: 1=error, 2=warning, 3=info, 4=hint
+        const severity_str = if (obj.get("severity")) |sev| switch (sev) {
+            .integer => |s| switch (s) {
+                1 => "error",
+                2 => "warning",
+                3 => "info",
+                4 => "hint",
+                else => "unknown",
+            },
+            else => "unknown",
+        } else "unknown";
+
+        const message = if (obj.get("message")) |msg| switch (msg) {
+            .string => |s| s,
+            else => "(no message)",
+        } else "(no message)";
+
+        aw.writer.print("{s}:{d}:{d}: {s}: {s}", .{ file_path, line + 1, col + 1, severity_str, message }) catch {
+            aw.deinit();
+            return error.OutOfMemory;
+        };
+    }
+
+    return aw.toOwnedSlice() catch {
+        aw.deinit();
+        return error.OutOfMemory;
+    };
 }
 
 fn handleFormat(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {

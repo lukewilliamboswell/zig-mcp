@@ -2,6 +2,7 @@ const std = @import("std");
 const LspClient = @import("../lsp/client.zig").LspClient;
 const uri_util = @import("../types/uri.zig");
 const FileSystem = @import("../fs.zig").FileSystem;
+const DiagnosticsCache = @import("diagnostics.zig").DiagnosticsCache;
 
 const log = std.log.scoped(.docs);
 
@@ -13,9 +14,11 @@ pub const DocumentState = struct {
     workspace_path: []const u8,
     fs: FileSystem,
     mutex: std.Thread.Mutex = .{},
+    diagnostics_cache: ?*DiagnosticsCache = null,
 
     const DocInfo = struct {
         version: i64,
+        content_hash: [32]u8,
     };
 
     pub fn init(allocator: std.mem.Allocator, workspace_path: []const u8, fs: FileSystem) DocumentState {
@@ -39,16 +42,21 @@ pub const DocumentState = struct {
         const file_uri = try uri_util.pathToUri(self.allocator, abs_path);
         defer self.allocator.free(file_uri);
 
-        // Fast path: check under lock, return immediately if already open
+        // Fast path: check under lock, sync if changed, return if already open
         {
             self.mutex.lock();
             defer self.mutex.unlock();
             if (self.open_docs.get(file_uri)) |_| {
+                // Release lock for I/O, then sync if file changed on disk
+                self.mutex.unlock();
+                _ = self.syncIfChanged(lsp_client, file_uri, abs_path);
+                self.mutex.lock();
                 return try ret_allocator.dupe(u8, file_uri);
             }
         }
 
         // Slow path: read file content outside the lock (no mutex held during I/O)
+        var content_hash: [32]u8 = undefined;
         const content = self.fs.readFileAlloc(self.allocator, abs_path, 10 * 1024 * 1024) catch |err| {
             return switch (err) {
                 error.FileNotFound => error.FileNotFound,
@@ -56,6 +64,7 @@ pub const DocumentState = struct {
             };
         };
         defer self.allocator.free(content);
+        std.crypto.hash.Blake3.hash(content, &content_hash, .{});
 
         // Register a diagnostics waiter BEFORE sending didOpen to avoid race conditions.
         // ZLS sends textDocument/publishDiagnostics after analyzing the file.
@@ -108,6 +117,7 @@ pub const DocumentState = struct {
         };
         self.open_docs.put(self.allocator, stored_uri, .{
             .version = 1,
+            .content_hash = content_hash,
         }) catch {
             self.allocator.free(stored_uri);
             self.mutex.unlock();
@@ -126,6 +136,85 @@ pub const DocumentState = struct {
         }
 
         return try ret_allocator.dupe(u8, file_uri);
+    }
+
+    /// Re-reads a file from disk, compares its BLAKE3 hash with the stored hash,
+    /// and sends textDocument/didChange if the content has changed.
+    /// Returns true if the file was re-synced.
+    fn syncIfChanged(self: *DocumentState, lsp_client: *LspClient, file_uri: []const u8, abs_path: []const u8) bool {
+        // Read file outside lock
+        const content = self.fs.readFileAlloc(self.allocator, abs_path, 10 * 1024 * 1024) catch |err| {
+            log.warn("syncIfChanged: failed to read {s}: {}", .{ abs_path, err });
+            return false;
+        };
+        defer self.allocator.free(content);
+
+        var new_hash: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(content, &new_hash, .{});
+
+        self.mutex.lock();
+
+        // Look up stored doc info
+        const entry = self.open_docs.getEntry(file_uri) orelse {
+            self.mutex.unlock();
+            return false;
+        };
+        const info = entry.value_ptr;
+
+        // Compare hashes — unchanged means no work needed
+        if (std.mem.eql(u8, &info.content_hash, &new_hash)) {
+            self.mutex.unlock();
+            return false;
+        }
+
+        // Content changed: bump version, update hash
+        info.version += 1;
+        info.content_hash = new_hash;
+        const version = info.version;
+
+        // Register diagnostics waiter before sending notification
+        const diag_event = lsp_client.registerDiagnosticsWaiter(file_uri) catch null;
+
+        // Send didChange with full content replacement
+        {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+
+            const ContentChange = struct { text: []const u8 };
+            const DidChangeParams = struct {
+                textDocument: struct {
+                    uri: []const u8,
+                    version: i64,
+                },
+                contentChanges: []const ContentChange,
+            };
+
+            const changes = [1]ContentChange{.{ .text = content }};
+
+            lsp_client.sendNotification(arena.allocator(), "textDocument/didChange", DidChangeParams{
+                .textDocument = .{
+                    .uri = file_uri,
+                    .version = version,
+                },
+                .contentChanges = &changes,
+            }) catch |err| {
+                log.warn("syncIfChanged: didChange failed: {}", .{err});
+                self.mutex.unlock();
+                if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
+                return false;
+            };
+        }
+
+        self.mutex.unlock();
+
+        // Wait for ZLS to re-analyze the changed content
+        if (diag_event) |event| {
+            event.timedWait(10 * std.time.ns_per_s) catch {};
+            lsp_client.unregisterDiagnosticsWaiter(file_uri);
+        }
+
+        log.info("syncIfChanged: re-synced {s} (version {d})", .{ file_uri, version });
+        return true;
     }
 
     /// Close a document in ZLS.
@@ -147,6 +236,9 @@ pub const DocumentState = struct {
             };
 
             self.allocator.free(kv.key);
+
+            // Remove cached diagnostics for this file
+            if (self.diagnostics_cache) |cache| cache.remove(file_uri);
         }
     }
 
@@ -183,6 +275,9 @@ pub const DocumentState = struct {
                     text: []const u8,
                 },
             };
+
+            // Compute and store content hash for change detection
+            std.crypto.hash.Blake3.hash(content, &entry.value_ptr.content_hash, .{});
 
             lsp_client.sendNotification(arena.allocator(), "textDocument/didOpen", DidOpenParams{
                 .textDocument = .{
@@ -225,4 +320,49 @@ test "DocumentState init and deinit" {
     var ds = DocumentState.init(allocator, "/tmp/workspace", tfs.filesystem());
     defer ds.deinit();
     try std.testing.expectEqualStrings("/tmp/workspace", ds.workspace_path);
+}
+
+test "content_hash is stored in DocInfo and differs for different content" {
+    var hash_a: [32]u8 = undefined;
+    var hash_b: [32]u8 = undefined;
+    var hash_a2: [32]u8 = undefined;
+
+    std.crypto.hash.Blake3.hash("const x = 1;", &hash_a, .{});
+    std.crypto.hash.Blake3.hash("const x = 2;", &hash_b, .{});
+    std.crypto.hash.Blake3.hash("const x = 1;", &hash_a2, .{});
+
+    // Same content produces same hash
+    try std.testing.expectEqual(hash_a, hash_a2);
+    // Different content produces different hash
+    try std.testing.expect(!std.mem.eql(u8, &hash_a, &hash_b));
+}
+
+test "DocInfo stores content_hash for change detection" {
+    const allocator = std.testing.allocator;
+    const TestFileSystem = @import("../fs.zig").TestFileSystem;
+    var tfs = TestFileSystem{};
+    defer tfs.deinit(allocator);
+    var ds = DocumentState.init(allocator, "/tmp/workspace", tfs.filesystem());
+    defer ds.deinit();
+
+    // Simulate what ensureOpen does: compute hash and store DocInfo
+    const content = "const std = @import(\"std\");";
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(content, &hash, .{});
+
+    const uri = try allocator.dupe(u8, "file:///tmp/workspace/main.zig");
+    ds.open_docs.put(allocator, uri, .{
+        .version = 1,
+        .content_hash = hash,
+    }) catch unreachable;
+
+    // Verify stored hash matches
+    const info = ds.open_docs.get("file:///tmp/workspace/main.zig").?;
+    try std.testing.expectEqual(@as(i64, 1), info.version);
+    try std.testing.expectEqual(hash, info.content_hash);
+
+    // Verify a different content would produce a different hash
+    var new_hash: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash("const std = @import(\"std\");\nvar x: u32 = 0;", &new_hash, .{});
+    try std.testing.expect(!std.mem.eql(u8, &info.content_hash, &new_hash));
 }

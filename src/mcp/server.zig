@@ -14,6 +14,7 @@ const ResourceContext = resources.ResourceContext;
 const prompts = @import("../bridge/prompts.zig");
 const PromptContext = prompts.PromptContext;
 const FileSystem = @import("../fs.zig").FileSystem;
+const DiagnosticsCache = @import("../state/diagnostics.zig").DiagnosticsCache;
 
 const log = std.log.scoped(.mcp_server);
 
@@ -51,6 +52,7 @@ pub const McpServer = struct {
     zvm_path: ?[]const u8 = null,
     zls_path: ?[]const u8 = null,
     fs: FileSystem,
+    diagnostics_cache: ?*DiagnosticsCache = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -359,6 +361,7 @@ pub const McpServer = struct {
             .zvm_path = self.zvm_path,
             .zls_path = self.zls_path,
             .fs = self.fs,
+            .diagnostics_cache = self.diagnostics_cache,
         };
 
         const result_text = handler(ctx, tool_args) catch |err| {
@@ -440,6 +443,9 @@ pub const McpServer = struct {
         const zls_proc = self.zls_process orelse return false;
 
         log.info("Attempting ZLS reconnection...", .{});
+
+        // Clear cached diagnostics from the old session
+        if (self.diagnostics_cache) |cache| cache.clearAll();
 
         // Disconnect old LSP session (closes old pipes, joins threads)
         self.lsp_client.disconnect();
