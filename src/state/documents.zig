@@ -140,11 +140,12 @@ pub const DocumentState = struct {
         while (it.next()) |entry| {
             const uri = entry.value_ptr.uri;
 
-            // Convert URI back to path for re-reading
-            const path = if (std.mem.startsWith(u8, uri, "file://"))
-                uri[7..]
-            else
-                uri;
+            // Convert URI back to path for re-reading (handles percent-encoding)
+            const path = uri_util.uriToPath(self.allocator, uri) catch {
+                std.debug.print("[zig-mcp/docs] Failed to decode URI {s} for reopen\n", .{uri});
+                continue;
+            };
+            defer self.allocator.free(path);
 
             const content = std.fs.cwd().readFileAlloc(self.allocator, path, 10 * 1024 * 1024) catch {
                 std.debug.print("[zig-mcp/docs] Failed to re-read {s} for reopen\n", .{path});
@@ -185,3 +186,21 @@ pub const DocumentState = struct {
         self.open_docs.deinit(self.allocator);
     }
 };
+
+test "uriToPath correctly decodes percent-encoded URIs used by reopenAll" {
+    const allocator = std.testing.allocator;
+
+    // Simulate what reopenAll does: convert a file URI back to a path.
+    // The old code just stripped "file://" which breaks on percent-encoded paths.
+    const uri = "file:///home/user/my%20project/foo%23bar.zig";
+    const path = try uri_util.uriToPath(allocator, uri);
+    defer allocator.free(path);
+    try std.testing.expectEqualStrings("/home/user/my project/foo#bar.zig", path);
+}
+
+test "DocumentState init and deinit" {
+    const allocator = std.testing.allocator;
+    var ds = DocumentState.init(allocator, "/tmp/workspace");
+    defer ds.deinit();
+    try std.testing.expectEqualStrings("/tmp/workspace", ds.workspace_path);
+}
