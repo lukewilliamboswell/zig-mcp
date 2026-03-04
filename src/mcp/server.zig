@@ -39,6 +39,13 @@ const supported_protocol_versions = [_][]const u8{
 
 /// MCP protocol server that bridges JSON-RPC requests to tool/resource/prompt handlers.
 pub const McpServer = struct {
+    pub const Config = struct {
+        allow_command_tools: bool = false,
+        zig_path: ?[]const u8 = null,
+        zvm_path: ?[]const u8 = null,
+        zls_path: ?[]const u8 = null,
+    };
+
     state: State = .uninitialized,
     transport: *McpTransport,
     registry: *Registry,
@@ -47,10 +54,7 @@ pub const McpServer = struct {
     workspace: *const Workspace,
     allocator: std.mem.Allocator,
     zls_process: ?*ZlsProcess = null,
-    allow_command_tools: bool = false,
-    zig_path: ?[]const u8 = null,
-    zvm_path: ?[]const u8 = null,
-    zls_path: ?[]const u8 = null,
+    config: Config,
     fs: FileSystem,
     diagnostics_cache: ?*DiagnosticsCache = null,
 
@@ -61,11 +65,8 @@ pub const McpServer = struct {
         lsp_client: *LspClient,
         doc_state: *DocumentState,
         workspace: *const Workspace,
-        allow_command_tools: bool,
-        zig_path: ?[]const u8,
-        zvm_path: ?[]const u8,
-        zls_path: ?[]const u8,
         fs: FileSystem,
+        config: Config,
     ) McpServer {
         return .{
             .transport = transport,
@@ -74,10 +75,7 @@ pub const McpServer = struct {
             .doc_state = doc_state,
             .workspace = workspace,
             .allocator = allocator,
-            .allow_command_tools = allow_command_tools,
-            .zig_path = zig_path,
-            .zvm_path = zvm_path,
-            .zls_path = zls_path,
+            .config = config,
             .fs = fs,
         };
     }
@@ -356,10 +354,10 @@ pub const McpServer = struct {
             .doc_state = self.doc_state,
             .workspace = self.workspace,
             .allocator = allocator,
-            .allow_command_tools = self.allow_command_tools,
-            .zig_path = self.zig_path,
-            .zvm_path = self.zvm_path,
-            .zls_path = self.zls_path,
+            .allow_command_tools = self.config.allow_command_tools,
+            .zig_path = self.config.zig_path,
+            .zvm_path = self.config.zvm_path,
+            .zls_path = self.config.zls_path,
             .fs = self.fs,
             .diagnostics_cache = self.diagnostics_cache,
         };
@@ -546,8 +544,8 @@ pub const McpServer = struct {
         const ctx = ResourceContext{
             .allocator = allocator,
             .workspace = self.workspace,
-            .zig_path = self.zig_path,
-            .zls_path = self.zls_path,
+            .zig_path = self.config.zig_path,
+            .zls_path = self.config.zls_path,
             .fs = self.fs,
         };
 
@@ -677,7 +675,7 @@ pub const McpServer = struct {
             .workspace = self.workspace,
             .lsp_client = self.lsp_client,
             .doc_state = self.doc_state,
-            .zig_path = self.zig_path,
+            .zig_path = self.config.zig_path,
             .fs = self.fs,
         };
 

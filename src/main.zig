@@ -207,7 +207,12 @@ pub fn main() !void {
     var transport = McpTransport.init();
 
     // Run MCP server (with ZLS process for auto-reconnect on crash)
-    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, &workspace, allow_command_tools, zig_path, zvm_path, zls_path, fs);
+    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, &workspace, fs, .{
+        .allow_command_tools = allow_command_tools,
+        .zig_path = zig_path,
+        .zvm_path = zvm_path,
+        .zls_path = zls_path,
+    });
     server.zls_process = &zls_proc;
     server.diagnostics_cache = &diagnostics_cache;
     log.info("Server ready, waiting for MCP messages on stdin", .{});
@@ -239,7 +244,12 @@ fn runWithoutZls(
     try tools.registerAll(&registry, ServerCapabilities{});
 
     var transport = McpTransport.init();
-    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, workspace, allow_command_tools, zig_path, zvm_path, zls_path, fs);
+    var server = McpServer.init(allocator, &transport, &registry, &lsp_client, &doc_state, workspace, fs, .{
+        .allow_command_tools = allow_command_tools,
+        .zig_path = zig_path,
+        .zvm_path = zvm_path,
+        .zls_path = zls_path,
+    });
     log.info("Running without ZLS (command tools only)", .{});
     try server.run();
 }
