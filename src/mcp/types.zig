@@ -60,6 +60,14 @@ pub const Resource = struct {
     mimeType: ?[]const u8 = null,
 };
 
+/// MCP Resource template definition (for resources/list resourceTemplates).
+pub const ResourceTemplate = struct {
+    uriTemplate: []const u8,
+    name: []const u8,
+    description: ?[]const u8 = null,
+    mimeType: ?[]const u8 = null,
+};
+
 /// MCP resource content.
 pub const ResourceContent = struct {
     uri: []const u8,

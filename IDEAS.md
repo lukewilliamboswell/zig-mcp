@@ -22,7 +22,8 @@ zig-mcp v0.1.0 currently provides:
 - **18 tools**: 13 LSP-backed code intelligence tools + 5 command execution tools
 - **stdio transport** only (newline-delimited JSON-RPC)
 - **3 protocol versions**: 2025-11-25, 2025-06-18, 2024-11-05
-- **Empty resources list**, no prompts, no sampling, no logging capability
+- **2 resources**: `zig://project-info` (versions + build.zig.zon) and `file:///{path}` workspace file template
+- No prompts, no sampling, no logging capability
 - **Auto-reconnect** to ZLS (up to 5 restarts), lazy document loading, degraded mode
 - **Security**: workspace-scoped paths, trusted binary policy, canonical path enforcement
 
@@ -404,7 +405,7 @@ Revised with client support research and ZLS capability verification. Features a
 |---|---------|---------|-------------|--------|----------------|
 | 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Do first** — trivial metadata, no runtime changes |
 | 4 | Prompts | 5/6 | High | Medium | **Do first** — broadest client support after tools |
-| 1 | Workspace Resources | 4/6 | High | Medium | **Do first** — unlocks resources capability |
+| 1 | Workspace Resources | 4/6 | High | Medium | **Done** — `zig://project-info` + `file:///{path}` template |
 | 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Do first** — tool, so universally supported; backed by ZLS |
 | 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Do soon** — completes code action workflow |
 | 16 | Multi-File Diagnostics | 6/6¹ | High | Medium² | **Do soon** — high payoff but needs diagnostics cache |
@@ -412,7 +413,7 @@ Revised with client support research and ZLS capability verification. Features a
 | 5 | Structured Logging | 1-2/6 | Medium | Low-Medium | **Do soon** — aids debugging, low client support but useful on stderr too |
 | 6 | Progress Notifications | 1-2/6 | Medium | Medium | **Do soon** — improves perceived speed |
 | 9 | Std Library Docs | 4-6/6³ | High | **High**⁴ | **Reassess** — high value but high effort; `zig_hover` already provides per-symbol docs |
-| 3 | Resource Templates | 4/6 | Medium | Medium | **Later** — builds on #1 |
+| 3 | Resource Templates | 4/6 | Medium | Medium | **Partial** — `file:///{path}` shipped with #1; symbol/diagnostics templates later |
 | 2 | Resource Subscriptions | 1-2/6 | Medium | Medium | **Later** — builds on #1, few clients support it |
 | 12 | Completion/Autocomplete | 1-2/6 | Medium | Medium | **Later** — builds on #3, #4; VS Code only |
 | 17 | Symbol Search Filtering | 6/6¹ | Medium | Low | **Later** — incremental improvement |

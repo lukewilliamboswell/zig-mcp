@@ -8,6 +8,8 @@ const LspClient = @import("../lsp/client.zig").LspClient;
 const DocumentState = @import("../state/documents.zig").DocumentState;
 const Workspace = @import("../state/workspace.zig").Workspace;
 const ZlsProcess = @import("../zls/process.zig").ZlsProcess;
+const resources = @import("../bridge/resources.zig");
+const ResourceContext = resources.ResourceContext;
 
 const log = std.log.scoped(.mcp_server);
 
@@ -174,6 +176,8 @@ pub const McpServer = struct {
             try self.handleToolsCall(allocator, id, params);
         } else if (std.mem.eql(u8, method, "resources/list")) {
             try self.handleResourcesList(allocator, id);
+        } else if (std.mem.eql(u8, method, "resources/read")) {
+            try self.handleResourcesRead(allocator, id, params);
         } else if (std.mem.eql(u8, method, "prompts/list")) {
             try self.handlePromptsList(allocator, id);
         } else if (std.mem.eql(u8, method, "ping")) {
@@ -434,7 +438,108 @@ pub const McpServer = struct {
 
     fn handleResourcesList(self: *McpServer, allocator: std.mem.Allocator, id: ?json_rpc.RequestId) !void {
         const rid = id orelse return;
-        const resp = try writeResourcesListResponse(allocator, rid);
+        const resource_list = resources.listResources();
+        const template_list = resources.listResourceTemplates();
+
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        var jw: std.json.Stringify = .{
+            .writer = &aw.writer,
+            .options = .{},
+        };
+
+        try jw.beginObject();
+        try jw.objectField("jsonrpc");
+        try jw.write("2.0");
+        try jw.objectField("id");
+        try rid.jsonStringify(&jw);
+        try jw.objectField("result");
+        try jw.beginObject();
+        try jw.objectField("resources");
+        try jw.beginArray();
+        for (resource_list) |r| {
+            try jw.write(r);
+        }
+        try jw.endArray();
+        try jw.objectField("resourceTemplates");
+        try jw.beginArray();
+        for (template_list) |t| {
+            try jw.write(t);
+        }
+        try jw.endArray();
+        try jw.endObject();
+        try jw.endObject();
+
+        const resp = try aw.toOwnedSlice();
+        try self.transport.writeMessage(resp);
+    }
+
+    fn handleResourcesRead(self: *McpServer, allocator: std.mem.Allocator, id: ?json_rpc.RequestId, params: std.json.Value) !void {
+        const rid = id orelse return;
+
+        const params_obj = switch (params) {
+            .object => |o| o,
+            else => {
+                const resp = try json_rpc.writeError(allocator, rid, json_rpc.ErrorCode.invalid_params, "Invalid params");
+                try self.transport.writeMessage(resp);
+                return;
+            },
+        };
+
+        const resource_uri = switch (params_obj.get("uri") orelse .null) {
+            .string => |s| s,
+            else => {
+                const resp = try json_rpc.writeError(allocator, rid, json_rpc.ErrorCode.invalid_params, "Missing uri parameter");
+                try self.transport.writeMessage(resp);
+                return;
+            },
+        };
+
+        const ctx = ResourceContext{
+            .allocator = allocator,
+            .workspace = self.workspace,
+            .zig_path = self.zig_path,
+            .zls_path = self.zls_path,
+        };
+
+        const content_text = resources.readResource(ctx, resource_uri) catch |err| {
+            const err_msg = switch (err) {
+                error.ResourceNotFound => "Resource not found",
+                error.OutOfMemory => "Out of memory",
+                error.ReadFailed => "Failed to read resource",
+                error.PathOutsideWorkspace => "Path is outside workspace",
+            };
+            const resp = try json_rpc.writeError(allocator, rid, json_rpc.ErrorCode.invalid_params, err_msg);
+            try self.transport.writeMessage(resp);
+            return;
+        };
+
+        // Build response with contents array
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        var jw: std.json.Stringify = .{
+            .writer = &aw.writer,
+            .options = .{},
+        };
+
+        try jw.beginObject();
+        try jw.objectField("jsonrpc");
+        try jw.write("2.0");
+        try jw.objectField("id");
+        try rid.jsonStringify(&jw);
+        try jw.objectField("result");
+        try jw.beginObject();
+        try jw.objectField("contents");
+        try jw.beginArray();
+        try jw.beginObject();
+        try jw.objectField("uri");
+        try jw.write(resource_uri);
+        try jw.objectField("text");
+        try jw.write(content_text);
+        try jw.endObject();
+        try jw.endArray();
+        try jw.endObject();
+        try jw.endObject();
+
+        const resp = try aw.toOwnedSlice();
         try self.transport.writeMessage(resp);
     }
 
@@ -461,14 +566,10 @@ fn methodAllowedDuringInitialize(method: []const u8) bool {
         std.mem.eql(u8, method, "tools/list") or
         std.mem.eql(u8, method, "tools/call") or
         std.mem.eql(u8, method, "resources/list") or
+        std.mem.eql(u8, method, "resources/read") or
         std.mem.eql(u8, method, "prompts/list") or
         std.mem.eql(u8, method, "ping") or
         std.mem.eql(u8, method, "shutdown");
-}
-
-fn writeResourcesListResponse(allocator: std.mem.Allocator, id: json_rpc.RequestId) ![]const u8 {
-    const empty_resources: []const mcp_types.Resource = &.{};
-    return json_rpc.writeResponse(allocator, id, .{ .resources = empty_resources });
 }
 
 fn writePromptsListResponse(allocator: std.mem.Allocator, id: json_rpc.RequestId) ![]const u8 {
@@ -538,16 +639,18 @@ test "prompts/list response uses array shape" {
     try std.testing.expectEqual(@as(usize, 0), result.get("prompts").?.array.items.len);
 }
 
-test "resources/list response uses array shape" {
-    const alloc = std.testing.allocator;
-    const resp = try writeResourcesListResponse(alloc, .{ .integer = 1 });
-    defer alloc.free(resp);
+test "listResources returns project-info" {
+    const res = resources.listResources();
+    try std.testing.expect(res.len > 0);
+    try std.testing.expectEqualStrings("zig://project-info", res[0].uri);
+}
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, resp, .{});
-    defer parsed.deinit();
+test "listResourceTemplates returns file template" {
+    const templates = resources.listResourceTemplates();
+    try std.testing.expect(templates.len > 0);
+    try std.testing.expectEqualStrings("file:///{path}", templates[0].uriTemplate);
+}
 
-    const obj = parsed.value.object;
-    const result = obj.get("result").?.object;
-    try std.testing.expect(result.get("resources").? == .array);
-    try std.testing.expectEqual(@as(usize, 0), result.get("resources").?.array.items.len);
+test "method gating allows resources/read during initialize" {
+    try std.testing.expect(methodAllowedDuringInitialize("resources/read"));
 }
