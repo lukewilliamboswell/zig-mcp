@@ -4,6 +4,11 @@ const std = @import("std");
 pub const ServerCapabilities = struct {
     tools: ?ToolsCapability = null,
     resources: ?ResourcesCapability = null,
+    prompts: ?PromptsCapability = null,
+};
+
+pub const PromptsCapability = struct {
+    listChanged: bool = false,
 };
 
 pub const ToolsCapability = struct {
@@ -75,6 +80,24 @@ pub const ResourceTemplate = struct {
     name: []const u8,
     description: ?[]const u8 = null,
     mimeType: ?[]const u8 = null,
+};
+
+/// MCP Prompt definition (for prompts/list).
+pub const Prompt = struct {
+    name: []const u8,
+    description: ?[]const u8 = null,
+    arguments: ?[]const PromptArgument = null,
+};
+
+pub const PromptArgument = struct {
+    name: []const u8,
+    description: ?[]const u8 = null,
+    required: ?bool = null,
+};
+
+pub const PromptMessage = struct {
+    role: []const u8,
+    content: TextContent,
 };
 
 /// MCP resource content.

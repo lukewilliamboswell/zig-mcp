@@ -25,6 +25,7 @@ comptime {
     _ = @import("bridge/registry.zig");
     _ = @import("bridge/tools.zig");
     _ = @import("bridge/resources.zig");
+    _ = @import("bridge/prompts.zig");
     _ = @import("state/documents.zig");
     _ = @import("state/workspace.zig");
     _ = @import("zls/process.zig");

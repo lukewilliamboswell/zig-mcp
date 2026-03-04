@@ -10,6 +10,8 @@ const Workspace = @import("../state/workspace.zig").Workspace;
 const ZlsProcess = @import("../zls/process.zig").ZlsProcess;
 const resources = @import("../bridge/resources.zig");
 const ResourceContext = resources.ResourceContext;
+const prompts = @import("../bridge/prompts.zig");
+const PromptContext = prompts.PromptContext;
 
 const log = std.log.scoped(.mcp_server);
 
@@ -180,6 +182,8 @@ pub const McpServer = struct {
             try self.handleResourcesRead(allocator, id, params);
         } else if (std.mem.eql(u8, method, "prompts/list")) {
             try self.handlePromptsList(allocator, id);
+        } else if (std.mem.eql(u8, method, "prompts/get")) {
+            try self.handlePromptsGet(allocator, id, params);
         } else if (std.mem.eql(u8, method, "ping")) {
             if (id) |rid| {
                 const resp = try json_rpc.writeResponse(allocator, rid, .{});
@@ -217,6 +221,7 @@ pub const McpServer = struct {
             .capabilities = .{
                 .tools = .{},
                 .resources = .{},
+                .prompts = .{},
             },
             .serverInfo = .{
                 .name = server_name,
@@ -566,7 +571,143 @@ pub const McpServer = struct {
 
     fn handlePromptsList(self: *McpServer, allocator: std.mem.Allocator, id: ?json_rpc.RequestId) !void {
         const rid = id orelse return;
-        const resp = try writePromptsListResponse(allocator, rid);
+        const prompt_list = prompts.listPrompts();
+
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        var jw: std.json.Stringify = .{
+            .writer = &aw.writer,
+            .options = .{},
+        };
+
+        try jw.beginObject();
+        try jw.objectField("jsonrpc");
+        try jw.write("2.0");
+        try jw.objectField("id");
+        try rid.jsonStringify(&jw);
+        try jw.objectField("result");
+        try jw.beginObject();
+        try jw.objectField("prompts");
+        try jw.beginArray();
+        for (prompt_list) |p| {
+            try jw.beginObject();
+            try jw.objectField("name");
+            try jw.write(p.name);
+            if (p.description) |desc| {
+                try jw.objectField("description");
+                try jw.write(desc);
+            }
+            if (p.arguments) |args| {
+                try jw.objectField("arguments");
+                try jw.beginArray();
+                for (args) |arg| {
+                    try jw.beginObject();
+                    try jw.objectField("name");
+                    try jw.write(arg.name);
+                    if (arg.description) |desc| {
+                        try jw.objectField("description");
+                        try jw.write(desc);
+                    }
+                    if (arg.required) |req| {
+                        try jw.objectField("required");
+                        try jw.write(req);
+                    }
+                    try jw.endObject();
+                }
+                try jw.endArray();
+            }
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
+        try jw.endObject();
+
+        const resp = try aw.toOwnedSlice();
+        try self.transport.writeMessage(resp);
+    }
+
+    fn handlePromptsGet(self: *McpServer, allocator: std.mem.Allocator, id: ?json_rpc.RequestId, params: std.json.Value) !void {
+        const rid = id orelse return;
+
+        const params_obj = switch (params) {
+            .object => |o| o,
+            else => {
+                const resp = try json_rpc.writeError(allocator, rid, json_rpc.ErrorCode.invalid_params, "Invalid params");
+                try self.transport.writeMessage(resp);
+                return;
+            },
+        };
+
+        const prompt_name = switch (params_obj.get("name") orelse .null) {
+            .string => |s| s,
+            else => {
+                const resp = try json_rpc.writeError(allocator, rid, json_rpc.ErrorCode.invalid_params, "Missing prompt name");
+                try self.transport.writeMessage(resp);
+                return;
+            },
+        };
+
+        const arguments = params_obj.get("arguments") orelse .null;
+
+        const ctx = PromptContext{
+            .allocator = allocator,
+            .workspace = self.workspace,
+            .lsp_client = self.lsp_client,
+            .doc_state = self.doc_state,
+            .zig_path = self.zig_path,
+        };
+
+        const messages = prompts.getPrompt(ctx, prompt_name, arguments) catch |err| {
+            const err_code: i64 = switch (err) {
+                error.PromptNotFound, error.InvalidParams => json_rpc.ErrorCode.invalid_params,
+                else => json_rpc.ErrorCode.internal_error,
+            };
+            const err_msg = switch (err) {
+                error.PromptNotFound => "Prompt not found",
+                error.InvalidParams => "Invalid parameters",
+                error.FileNotFound => "File not found",
+                error.FileReadError => "Could not read file",
+                error.PathOutsideWorkspace => "Path is outside workspace",
+                error.OutOfMemory => "Out of memory",
+            };
+            const resp = try json_rpc.writeError(allocator, rid, err_code, err_msg);
+            try self.transport.writeMessage(resp);
+            return;
+        };
+
+        // Build response
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        var jw: std.json.Stringify = .{
+            .writer = &aw.writer,
+            .options = .{},
+        };
+
+        try jw.beginObject();
+        try jw.objectField("jsonrpc");
+        try jw.write("2.0");
+        try jw.objectField("id");
+        try rid.jsonStringify(&jw);
+        try jw.objectField("result");
+        try jw.beginObject();
+        try jw.objectField("messages");
+        try jw.beginArray();
+        for (messages) |msg| {
+            try jw.beginObject();
+            try jw.objectField("role");
+            try jw.write(msg.role);
+            try jw.objectField("content");
+            try jw.beginObject();
+            try jw.objectField("type");
+            try jw.write("text");
+            try jw.objectField("text");
+            try jw.write(msg.content.text);
+            try jw.endObject();
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
+        try jw.endObject();
+
+        const resp = try aw.toOwnedSlice();
         try self.transport.writeMessage(resp);
     }
 };
@@ -589,13 +730,9 @@ fn methodAllowedDuringInitialize(method: []const u8) bool {
         std.mem.eql(u8, method, "resources/list") or
         std.mem.eql(u8, method, "resources/read") or
         std.mem.eql(u8, method, "prompts/list") or
+        std.mem.eql(u8, method, "prompts/get") or
         std.mem.eql(u8, method, "ping") or
         std.mem.eql(u8, method, "shutdown");
-}
-
-fn writePromptsListResponse(allocator: std.mem.Allocator, id: json_rpc.RequestId) ![]const u8 {
-    const empty_prompts: []const u0 = &.{};
-    return json_rpc.writeResponse(allocator, id, .{ .prompts = empty_prompts });
 }
 
 fn negotiateProtocolVersion(params: std.json.Value) ![]const u8 {
@@ -646,18 +783,14 @@ test "isRecoverableTransportError handles oversized messages" {
     try std.testing.expect(!isRecoverableTransportError(error.OutOfMemory));
 }
 
-test "prompts/list response uses array shape" {
-    const alloc = std.testing.allocator;
-    const resp = try writePromptsListResponse(alloc, .{ .integer = 1 });
-    defer alloc.free(resp);
+test "listPrompts returns 5 prompts" {
+    const prompt_list = prompts.listPrompts();
+    try std.testing.expectEqual(@as(usize, 5), prompt_list.len);
+    try std.testing.expectEqualStrings("review", prompt_list[0].name);
+}
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, resp, .{});
-    defer parsed.deinit();
-
-    const obj = parsed.value.object;
-    const result = obj.get("result").?.object;
-    try std.testing.expect(result.get("prompts").? == .array);
-    try std.testing.expectEqual(@as(usize, 0), result.get("prompts").?.array.items.len);
+test "method gating allows prompts/get during initialize" {
+    try std.testing.expect(methodAllowedDuringInitialize("prompts/get"));
 }
 
 test "listResources returns project-info" {

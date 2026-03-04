@@ -23,7 +23,8 @@ zig-mcp v0.1.0 currently provides:
 - **stdio transport** only (newline-delimited JSON-RPC)
 - **3 protocol versions**: 2025-11-25, 2025-06-18, 2024-11-05
 - **2 resources**: `zig://project-info` (versions + build.zig.zon) and `file:///{path}` workspace file template
-- No prompts, no sampling, no logging capability
+- **5 prompts**: `review`, `explain`, `fix-diagnostics`, `optimize`, `test-scaffold`
+- No sampling, no logging capability
 - **Auto-reconnect** to ZLS (up to 5 restarts), lazy document loading, degraded mode
 - **Security**: workspace-scoped paths, trusted binary policy, canonical path enforcement
 
@@ -109,18 +110,16 @@ Which clients actually support each MCP feature (as of March 2026):
 
 ---
 
-### 4. Prompts (Reusable Interaction Templates)
+### 4. Prompts (Reusable Interaction Templates) — DONE
 
-**What**: Define server-side prompt templates that clients can invoke, such as:
-- **`/review`** — Code review prompt: takes a file path, reads the file, and returns a structured review prompt with Zig best practices
-- **`/explain`** — Explain code: takes a symbol or file, gathers hover info and references, returns an explanation prompt
-- **`/fix-diagnostics`** — Auto-fix: gathers current diagnostics and returns a prompt asking the LLM to generate fixes
-- **`/optimize`** — Performance review: analyzes code and suggests Zig-specific optimizations (comptime, SIMD, allocation patterns)
-- **`/test-scaffold`** — Generate test scaffolding for a given function or module
+**Implemented**: 5 server-side prompt templates that clients invoke as slash commands:
+- **`/review`** — Code review: reads file, returns structured review prompt (correctness, memory safety, error handling, idiomatic Zig)
+- **`/explain`** — Explain code: reads file + optional ZLS hover at a position for symbol-specific context
+- **`/fix-diagnostics`** — Auto-fix: runs `zig ast-check`, includes diagnostics + source in a fix prompt
+- **`/optimize`** — Performance review: analyzes for comptime, SIMD, allocation, and cache optimization opportunities
+- **`/test-scaffold`** — Test generation: uses ZLS document symbols to discover public API, builds test scaffolding prompt
 
-**Benefit**: Prompts are **user-controlled** — they appear as slash commands in client UIs. They package domain expertise (Zig best practices, common patterns) into reusable workflows that the user can trigger with one command. Unlike tools (which the AI invokes), prompts are explicitly chosen by the user, giving them control over when expensive operations happen.
-
-**Productivity gain**: **High**. Each prompt encapsulates a multi-step workflow (read file → gather context → format prompt) into a single action. The `/fix-diagnostics` prompt alone could save significant time by automatically gathering all errors and proposing fixes in one shot.
+LSP-dependent prompts (`explain`, `test-scaffold`) gracefully degrade to file-content-only when ZLS is unavailable.
 
 **Spec reference**: [MCP Prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts)
 
@@ -394,7 +393,7 @@ Revised with client support research and ZLS capability verification. Features a
 | # | Feature | Clients | Productivity | Effort | Recommendation |
 |---|---------|---------|-------------|--------|----------------|
 | 14 | Tool Annotations | 1-2/6 | Medium | **Very Low** | **Done** — all 18 tools annotated |
-| 4 | Prompts | 5/6 | High | Medium | **Do first** — broadest client support after tools |
+| 4 | Prompts | 5/6 | High | Medium | **Done** — 5 prompts: review, explain, fix-diagnostics, optimize, test-scaffold |
 | 1 | Workspace Resources | 4/6 | High | Medium | **Done** — `zig://project-info` + `file:///{path}` template |
 | 21 | Inlay Hints Tool | 6/6¹ | Medium-High | Low | **Do first** — tool, so universally supported; backed by ZLS |
 | 22 | Apply Code Action | 6/6¹ | Medium-High | Medium | **Do soon** — completes code action workflow |
