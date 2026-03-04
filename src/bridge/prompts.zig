@@ -92,13 +92,31 @@ fn handleReview(ctx: PromptContext, arguments: std.json.Value) PromptError![]con
 
     var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
     aw.writer.print(
-        \\Review the following Zig source file. Check for:
+        \\You are an expert Zig developer performing a focused code review. Report only actionable issues.
         \\
-        \\1. **Correctness**: Logic errors, off-by-one, incorrect type usage
-        \\2. **Memory safety**: Leaks, use-after-free, missing defer/errdefer
-        \\3. **Error handling**: Unchecked errors, missing error cases, error set completeness
-        \\4. **Idiomatic Zig**: Style, naming conventions, use of comptime, proper use of optionals/error unions
-        \\5. **Performance**: Unnecessary allocations, missed comptime opportunities
+        \\Review the following Zig source file for:
+        \\
+        \\1. **Correctness**: Logic errors, off-by-one, incorrect type usage, undefined behavior from unsafe builtins (`@intCast`, `@ptrCast`, `@bitCast`)
+        \\2. **Memory safety**: Missing `defer`/`errdefer` paired with allocations, use-after-free, missing cleanup on error paths, partial initialization without `errdefer` for already-acquired resources
+        \\3. **Error handling**: Use of `anyerror` where a named error set would be better, silently discarded errors (`catch {{}}`), missing `errdefer` cleanup, error set completeness
+        \\4. **Idiomatic Zig**:
+        \\   - Naming: TitleCase for types and type-returning functions, camelCase for other functions, snake_case for variables/fields
+        \\   - Prefer optionals (`?T` + `orelse`) over sentinel values
+        \\   - Use tagged unions (`union(enum)`) over separate enum + data
+        \\   - Exhaustive `switch` — avoid `else` on enums when cases can be enumerated
+        \\   - Pass allocators explicitly, never use global state
+        \\   - `init()`/`deinit()` convention — `deinit` must never return errors
+        \\   - Prefer passing output buffers over returning allocated memory
+        \\   - Use `packed struct` only for bit-level layout, `extern struct` only for C ABI
+        \\5. **Performance**: Runtime computation movable to `comptime`, unnecessary heap allocations replaceable with stack/arena, large structs passed by value instead of `*const T`
+        \\
+        \\For each issue found, provide:
+        \\- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+        \\- **Line(s)**: approximate line number(s)
+        \\- **Problem**: what is wrong and why it matters
+        \\- **Fix**: concrete corrected code or clear suggestion
+        \\
+        \\Begin with a 1-2 sentence overall assessment. Order findings by severity. Do not flag formatting (use `zig fmt`) or suggest stylistic alternatives with no functional benefit.
         \\
         \\File: `{s}`
         \\
@@ -152,10 +170,11 @@ fn handleExplain(ctx: PromptContext, arguments: std.json.Value) PromptError![]co
         aw.writer.print(
             \\Explain the following Zig source file. Cover:
             \\
-            \\1. **Purpose**: What does this file/module do?
-            \\2. **Public API**: What functions/types are exported and how should they be used?
-            \\3. **Key patterns**: Notable Zig patterns used (comptime, error sets, allocators, etc.)
-            \\4. **Dependencies**: What does it import and why?
+            \\1. **Purpose**: What problem does this module solve? What is its role in the larger system?
+            \\2. **Public API**: Exported functions/types — signatures, expected usage, and error conditions
+            \\3. **Key Zig patterns**: Notable use of comptime, error sets, allocator threading, tagged unions, defer/errdefer, optionals
+            \\4. **Memory ownership**: Who allocates, who frees? What is the lifetime model?
+            \\5. **Dependencies**: What does it import and why? What are the coupling points?
             \\
             \\File: `{s}`
             \\
@@ -179,7 +198,14 @@ fn handleFixDiagnostics(ctx: PromptContext, arguments: std.json.Value) PromptErr
 
     if (diagnostics) |diag| {
         aw.writer.print(
-            \\The following Zig source file has diagnostics from `zig ast-check`. Please analyze each diagnostic and suggest fixes.
+            \\You are a Zig diagnostics expert. The following Zig source file has diagnostics from `zig ast-check`.
+            \\
+            \\For each diagnostic:
+            \\1. Explain **why** the error occurs (root cause, not just restating the message)
+            \\2. Provide the **corrected code** for the affected lines
+            \\3. Note if the fix might have **cascading effects** on other code
+            \\
+            \\If multiple diagnostics share a root cause, group them together.
             \\
             \\**Diagnostics:**
             \\```
@@ -216,12 +242,14 @@ fn handleOptimize(ctx: PromptContext, arguments: std.json.Value) PromptError![]c
     aw.writer.print(
         \\Analyze the following Zig source file for optimization opportunities. Consider:
         \\
-        \\1. **Comptime**: Can any runtime computation be moved to compile time?
-        \\2. **SIMD**: Are there loops that could benefit from SIMD operations?
-        \\3. **Allocations**: Can allocations be reduced, pooled, or replaced with stack/comptime buffers?
-        \\4. **Cache locality**: Are data structures laid out for good cache performance?
-        \\5. **Algorithm complexity**: Are there better algorithms or data structures for the task?
-        \\6. **Unnecessary work**: Redundant copies, repeated lookups, over-computation?
+        \\1. **Comptime**: Can runtime computation be moved to compile time? Look for: constant table lookups, format string construction from literals, type-level computations, `inline for` over comptime-known slices
+        \\2. **SIMD**: Are there loops over arrays of primitives that could use `@Vector(N, T)`? Check alignment requirements (`align(N)`)
+        \\3. **Allocations**: Can heap allocations be replaced with stack buffers (`var buf: [N]u8 = undefined`), `FixedBufferAllocator`, or arena allocators? Are arenas being `.reset()` in loops instead of recreated?
+        \\4. **Cache locality**: Would Struct-of-Arrays layout improve cache performance for hot loops that access single fields? Are related data placed adjacently?
+        \\5. **Unnecessary copies**: Large structs passed by value that should be `*const T`? Redundant `dupe`/`clone` calls? Slices that could be borrowed instead of owned?
+        \\6. **Algorithm complexity**: Better data structures or algorithms for the task?
+        \\
+        \\For each opportunity, estimate impact (HIGH/MEDIUM/LOW) and provide a concrete before/after code example. Do not suggest micro-optimizations that reduce readability for negligible gain.
         \\
         \\File: `{s}`
         \\
@@ -254,8 +282,13 @@ fn handleTestScaffold(ctx: PromptContext, arguments: std.json.Value) PromptError
             \\For each public function, create a test block that:
             \\- Tests the happy path with representative inputs
             \\- Tests edge cases (empty input, zero, null, boundary values)
-            \\- Tests error cases where applicable
-            \\- Uses `std.testing.allocator` for allocation-heavy code
+            \\- Tests error cases using `std.testing.expectError`
+            \\- Uses `std.testing.allocator` to detect leaks and use-after-free
+            \\- Uses `errdefer std.debug.print(...)` for diagnostic output on failure
+            \\- For functions with multiple test cases, use `inline for` over a comptime tuple for table-driven tests
+            \\- Consider testing allocation failure with `std.testing.FailingAllocator` for allocation-heavy code
+            \\
+            \\Name each test descriptively: `test "functionName returns error on empty input"` — describe behavior, not implementation.
             \\
             \\File: `{s}`
             \\
@@ -270,8 +303,13 @@ fn handleTestScaffold(ctx: PromptContext, arguments: std.json.Value) PromptError
             \\For each public function, create a test block that:
             \\- Tests the happy path with representative inputs
             \\- Tests edge cases (empty input, zero, null, boundary values)
-            \\- Tests error cases where applicable
-            \\- Uses `std.testing.allocator` for allocation-heavy code
+            \\- Tests error cases using `std.testing.expectError`
+            \\- Uses `std.testing.allocator` to detect leaks and use-after-free
+            \\- Uses `errdefer std.debug.print(...)` for diagnostic output on failure
+            \\- For functions with multiple test cases, use `inline for` over a comptime tuple for table-driven tests
+            \\- Consider testing allocation failure with `std.testing.FailingAllocator` for allocation-heavy code
+            \\
+            \\Name each test descriptively: `test "functionName returns error on empty input"` — describe behavior, not implementation.
             \\
             \\File: `{s}`
             \\
