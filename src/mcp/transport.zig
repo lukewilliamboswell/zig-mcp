@@ -54,6 +54,11 @@ pub const McpTransport = struct {
                 if (too_large) continue; // drain rest of oversized line
                 line.append(allocator, byte) catch {
                     line.deinit(allocator);
+                    // Drain rest of current line to avoid corrupting next read
+                    while (true) {
+                        const b = (try self.readByte()) orelse break;
+                        if (b == '\n') break;
+                    }
                     return error.OutOfMemory;
                 };
                 if (line.items.len > max_message_size) {

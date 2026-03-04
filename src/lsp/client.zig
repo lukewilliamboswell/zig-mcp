@@ -160,8 +160,6 @@ pub const LspClient = struct {
     /// Send LSP initialize request and initialized notification.
     pub fn initialize(self: *LspClient, allocator: std.mem.Allocator, workspace_uri: []const u8) ![]const u8 {
         // Build init params as JSON manually for full control
-
-        // Build init params as json.Value manually for more control
         const init_json =
             \\{"processId":null,"rootUri":"
         ;
@@ -371,10 +369,8 @@ pub const LspClient = struct {
                 };
 
                 self.pending_mutex.lock();
-                const maybe_pending = self.pending.get(id);
-                self.pending_mutex.unlock();
-
-                if (maybe_pending) |p| {
+                defer self.pending_mutex.unlock();
+                if (self.pending.get(id)) |p| {
                     // Store the full response body
                     p.response = self.allocator.dupe(u8, data) catch null;
                     p.event.set();

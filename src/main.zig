@@ -32,8 +32,6 @@ comptime {
     _ = @import("state/workspace.zig");
     _ = @import("zls/process.zig");
     _ = @import("lsp/client.zig");
-    _ = @import("cmd/zig_runner.zig");
-    _ = @import("cmd/zvm.zig");
     _ = @import("security/binary_policy.zig");
     _ = @import("fs.zig");
 }

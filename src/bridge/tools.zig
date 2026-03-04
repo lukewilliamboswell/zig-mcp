@@ -22,8 +22,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
 
     // Tool annotation presets
     const read_only: mcp_types.ToolAnnotations = .{ .readOnlyHint = true, .openWorldHint = false };
-    const write_local: mcp_types.ToolAnnotations = .{ .readOnlyHint = false, .destructiveHint = false, .openWorldHint = false };
-    const cmd_local: mcp_types.ToolAnnotations = .{ .readOnlyHint = false, .destructiveHint = false, .openWorldHint = false };
+    const local_mutation: mcp_types.ToolAnnotations = .{ .readOnlyHint = false, .destructiveHint = false, .openWorldHint = false };
 
     // ── LSP-backed tools (conditional on server capabilities) ──
 
@@ -108,7 +107,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{"file"},
         },
-        .annotations = write_local,
+        .annotations = local_mutation,
     });
 
     if (caps.rename) try reg.register("zig_rename", handleRename, .{
@@ -123,7 +122,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{ "file", "line", "character", "new_name" },
         },
-        .annotations = write_local,
+        .annotations = local_mutation,
     });
 
     if (caps.document_symbol) try reg.register("zig_document_symbols", handleDocumentSymbols, .{
@@ -180,7 +179,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
             }),
             .required = &.{ "file", "start_line", "start_char", "end_line", "end_char", "action_index" },
         },
-        .annotations = write_local,
+        .annotations = local_mutation,
     });
 
     if (caps.signature_help) try reg.register("zig_signature_help", handleSignatureHelp, .{
@@ -215,7 +214,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
                 .{ "args", "string", "Additional arguments to pass to zig build (space-separated)" },
             }),
         },
-        .annotations = cmd_local,
+        .annotations = local_mutation,
     });
 
     try reg.register("zig_test", handleTest, .{
@@ -227,7 +226,7 @@ pub fn registerAll(reg: *registry.Registry, caps: ServerCapabilities) !void {
                 .{ "filter", "string", "Optional: test name filter" },
             }),
         },
-        .annotations = cmd_local,
+        .annotations = local_mutation,
     });
 
     try reg.register("zig_check", handleCheck, .{
@@ -278,26 +277,8 @@ fn makeProps(allocator: std.mem.Allocator, comptime fields: anytype) ToolError!s
 }
 
 
-fn getStringArg(args: std.json.Value, key: []const u8) ?[]const u8 {
-    return switch (args) {
-        .object => |obj| if (obj.get(key)) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        else => null,
-    };
-}
-
-fn getIntArg(args: std.json.Value, key: []const u8) ?i64 {
-    return switch (args) {
-        .object => |obj| if (obj.get(key)) |v| switch (v) {
-            .integer => |i| i,
-            .float => |f| @intFromFloat(f),
-            else => null,
-        } else null,
-        else => null,
-    };
-}
+const getStringArg = registry.getStringArg;
+const getIntArg = registry.getIntArg;
 
 
 fn handleHover(ctx: ToolContext, args: std.json.Value) ToolError![]const u8 {
@@ -543,7 +524,7 @@ fn handleApplyCodeAction(ctx: ToolContext, args: std.json.Value) ToolError![]con
     const end_char = getIntArg(args, "end_char") orelse return ToolError.InvalidParams;
     const action_index_raw = getIntArg(args, "action_index") orelse return ToolError.InvalidParams;
     if (action_index_raw < 1) return ToolError.InvalidParams;
-    const action_index: usize = @intCast(action_index_raw);
+    const action_index: usize = std.math.cast(usize, action_index_raw) orelse return ToolError.InvalidParams;
 
     const file_uri = ctx.doc_state.ensureOpen(ctx.lsp_client, file, ctx.allocator) catch |err| return openPathToToolError(err);
     defer ctx.allocator.free(file_uri);

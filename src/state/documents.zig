@@ -62,50 +62,66 @@ pub const DocumentState = struct {
         const diag_event = lsp_client.registerDiagnosticsWaiter(file_uri) catch null;
 
         // Re-acquire lock, double-check, then register
+        // Use explicit lock/unlock (not defer) so we can release before the diagnostic wait.
         self.mutex.lock();
-        defer self.mutex.unlock();
 
         // Double-check: another thread may have opened it while we were reading
         if (self.open_docs.get(file_uri)) |_| {
+            self.mutex.unlock();
             if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
             return try ret_allocator.dupe(u8, file_uri);
         }
 
         // Send didOpen notification (still under lock to prevent duplicate opens)
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
+        {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
 
-        const DidOpenParams = struct {
-            textDocument: struct {
-                uri: []const u8,
-                languageId: []const u8,
-                version: i64,
-                text: []const u8,
-            },
-        };
+            const DidOpenParams = struct {
+                textDocument: struct {
+                    uri: []const u8,
+                    languageId: []const u8,
+                    version: i64,
+                    text: []const u8,
+                },
+            };
 
-        try lsp_client.sendNotification(arena.allocator(), "textDocument/didOpen", DidOpenParams{
-            .textDocument = .{
-                .uri = file_uri,
-                .languageId = "zig",
-                .version = 1,
-                .text = content,
-            },
-        });
+            lsp_client.sendNotification(arena.allocator(), "textDocument/didOpen", DidOpenParams{
+                .textDocument = .{
+                    .uri = file_uri,
+                    .languageId = "zig",
+                    .version = 1,
+                    .text = content,
+                },
+            }) catch |err| {
+                self.mutex.unlock();
+                if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
+                return err;
+            };
+        }
 
         // Track as open (stored with long-lived allocator)
-        const stored_uri = try self.allocator.dupe(u8, file_uri);
-        try self.open_docs.put(self.allocator, stored_uri, .{
+        const stored_uri = self.allocator.dupe(u8, file_uri) catch {
+            self.mutex.unlock();
+            if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
+            return error.OutOfMemory;
+        };
+        self.open_docs.put(self.allocator, stored_uri, .{
             .version = 1,
-        });
+        }) catch {
+            self.allocator.free(stored_uri);
+            self.mutex.unlock();
+            if (diag_event != null) lsp_client.unregisterDiagnosticsWaiter(file_uri);
+            return error.OutOfMemory;
+        };
+
+        // Release lock BEFORE waiting on diagnostics — no fragile unlock/relock pattern
+        self.mutex.unlock();
 
         // Wait for ZLS to publish initial diagnostics, indicating it has analyzed the file.
         // This ensures subsequent hover/definition requests get meaningful results.
         if (diag_event) |event| {
-            // Release the doc mutex while waiting so we don't block other operations
-            self.mutex.unlock();
             event.timedWait(10 * std.time.ns_per_s) catch {};
-            self.mutex.lock();
             lsp_client.unregisterDiagnosticsWaiter(file_uri);
         }
 

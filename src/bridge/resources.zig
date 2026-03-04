@@ -56,17 +56,17 @@ pub fn readResource(ctx: ResourceContext, resource_uri: []const u8) ResourceErro
 }
 
 fn readProjectInfo(ctx: ResourceContext) ResourceError![]const u8 {
-    const zig_ver = if (ctx.zig_path) |zp|
-        runVersionCommand(ctx.allocator, zp, "version") catch "unknown"
+    const zig_ver: ?[]const u8 = if (ctx.zig_path) |zp|
+        runVersionCommand(ctx.allocator, zp, "version") catch null
     else
-        "unknown";
-    defer if (!std.mem.eql(u8, zig_ver, "unknown")) ctx.allocator.free(zig_ver);
+        null;
+    defer if (zig_ver) |v| ctx.allocator.free(v);
 
-    const zls_ver = if (ctx.zls_path) |zp|
-        runVersionCommand(ctx.allocator, zp, "--version") catch "unknown"
+    const zls_ver: ?[]const u8 = if (ctx.zls_path) |zp|
+        runVersionCommand(ctx.allocator, zp, "--version") catch null
     else
-        "unknown";
-    defer if (!std.mem.eql(u8, zls_ver, "unknown")) ctx.allocator.free(zls_ver);
+        null;
+    defer if (zls_ver) |v| ctx.allocator.free(v);
 
     // Try to read build.zig.zon
     const zon_path = std.fs.path.join(ctx.allocator, &.{ ctx.workspace.root_path, "build.zig.zon" }) catch return error.OutOfMemory;
@@ -77,8 +77,8 @@ fn readProjectInfo(ctx: ResourceContext) ResourceError![]const u8 {
 
     var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
     aw.writer.print("Zig: {s}\nZLS: {s}\n\n--- build.zig.zon ---\n{s}", .{
-        std.mem.trimRight(u8, zig_ver, "\n\r "),
-        std.mem.trimRight(u8, zls_ver, "\n\r "),
+        std.mem.trimRight(u8, zig_ver orelse "unknown", "\n\r "),
+        std.mem.trimRight(u8, zls_ver orelse "unknown", "\n\r "),
         zon_content,
     }) catch return error.OutOfMemory;
     return aw.toOwnedSlice() catch return error.OutOfMemory;

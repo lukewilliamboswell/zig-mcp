@@ -325,26 +325,9 @@ fn handleTestScaffold(ctx: PromptContext, arguments: std.json.Value) PromptError
 }
 
 
-fn getStringArg(args: std.json.Value, key: []const u8) ?[]const u8 {
-    return switch (args) {
-        .object => |obj| if (obj.get(key)) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        else => null,
-    };
-}
-
-fn getIntArg(args: std.json.Value, key: []const u8) ?i64 {
-    return switch (args) {
-        .object => |obj| if (obj.get(key)) |v| switch (v) {
-            .integer => |i| i,
-            .float => |f| @intFromFloat(f),
-            else => null,
-        } else null,
-        else => null,
-    };
-}
+const registry = @import("registry.zig");
+const getStringArg = registry.getStringArg;
+const getIntArg = registry.getIntArg;
 
 fn readFileInWorkspace(ctx: PromptContext, file_path: []const u8) ?[]const u8 {
     const abs_path = uri_util.resolvePathWithinWorkspace(ctx.allocator, ctx.workspace.root_path, file_path, ctx.fs) catch return null;

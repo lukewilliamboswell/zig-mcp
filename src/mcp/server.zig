@@ -4,6 +4,7 @@ const mcp_types = @import("types.zig");
 const McpTransport = @import("transport.zig").McpTransport;
 const Registry = @import("../bridge/registry.zig").Registry;
 const ToolContext = @import("../bridge/registry.zig").ToolContext;
+const ToolError = @import("../bridge/registry.zig").ToolError;
 const LspClient = @import("../lsp/client.zig").LspClient;
 const DocumentState = @import("../state/documents.zig").DocumentState;
 const Workspace = @import("../state/workspace.zig").Workspace;
@@ -86,7 +87,9 @@ pub const McpServer = struct {
                 if (isRecoverableTransportError(err)) {
                     const error_resp = try json_rpc.writeError(self.allocator, null, json_rpc.ErrorCode.parse_error, "Message too large");
                     defer self.allocator.free(error_resp);
-                    self.transport.writeMessage(error_resp) catch {};
+                    self.transport.writeMessage(error_resp) catch |write_err| {
+                        log.warn("Failed to send error response: {}", .{write_err});
+                    };
                     continue;
                 }
                 return err;
@@ -106,7 +109,9 @@ pub const McpServer = struct {
                 log.err("Error handling message: {}", .{err});
                 // Try to send error response
                 const error_resp = json_rpc.writeError(arena_alloc, null, json_rpc.ErrorCode.internal_error, "Internal error") catch continue;
-                self.transport.writeMessage(error_resp) catch {};
+                self.transport.writeMessage(error_resp) catch |write_err| {
+                    log.warn("Failed to send error response: {}", .{write_err});
+                };
             };
 
             self.allocator.free(data);
@@ -378,7 +383,7 @@ pub const McpServer = struct {
         try self.writeToolResult(allocator, rid, result_text, false);
     }
 
-    fn writeToolError(self: *McpServer, allocator: std.mem.Allocator, id: json_rpc.RequestId, err: anytype) !void {
+    fn writeToolError(self: *McpServer, allocator: std.mem.Allocator, id: json_rpc.RequestId, err: ToolError) !void {
         const err_msg = switch (err) {
             error.InvalidParams => "Invalid parameters",
             error.LspError => "LSP error",

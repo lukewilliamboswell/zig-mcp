@@ -86,6 +86,29 @@ pub const Registry = struct {
 };
 
 
+/// Extract a string argument from a JSON object by key.
+pub fn getStringArg(args: std.json.Value, key: []const u8) ?[]const u8 {
+    return switch (args) {
+        .object => |obj| if (obj.get(key)) |v| switch (v) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
+/// Extract an integer argument from a JSON object by key.
+pub fn getIntArg(args: std.json.Value, key: []const u8) ?i64 {
+    return switch (args) {
+        .object => |obj| if (obj.get(key)) |v| switch (v) {
+            .integer => |i| i,
+            .float => |f| @intFromFloat(f),
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
 fn dummyHandler(_: ToolContext, _: std.json.Value) ToolError![]const u8 {
     return "ok";
 }
